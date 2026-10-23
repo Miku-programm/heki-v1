@@ -162,12 +162,14 @@ func (h *Handler) handleTCP(conn net.Conn, addr string, user *User) error {
 		return err
 	}
 	defer upstream.Close()
+	// Relay both directions; when either side ends, close both so the other
+	// copy unblocks (otherwise the upstream-side read blocks forever).
 	var up, down int64
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); n, _ := io.Copy(upstream, conn); up = n }()
-	go func() { defer wg.Done(); n, _ := io.Copy(conn, upstream); down = n }()
-	wg.Wait()
+	done := make(chan struct{}, 2)
+	go func() { n, _ := io.Copy(upstream, conn); up = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
+	go func() { n, _ := io.Copy(conn, upstream); down = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
+	<-done
+	<-done
 	h.mu.RLock()
 	report := h.callback.ReportTraffic
 	h.mu.RUnlock()
