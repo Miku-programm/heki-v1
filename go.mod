@@ -1,13 +1,15 @@
 module heki
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/hysteria/core/v2 v2.12.2
 	github.com/enfein/mieru/v3 v3.38.2
+	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-quic v0.7.0
+	golang.org/x/crypto v0.58.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -25,10 +27,9 @@ require (
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
-	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

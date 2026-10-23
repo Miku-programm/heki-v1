@@ -12,10 +12,13 @@
 | **tuic** | QUIC/UDP | ✅ `go test ./node -run TUIC`(接 sing-quic 真库,TCP 中继) |
 | **anytls** | TCP+TLS(会话复用+padding) | ✅ `go test ./node -run AnyTLS`(接 sing-anytls 真库) |
 | **mieru** | 私有混淆传输(TCP) | ✅ `go test ./node -run Mieru`(接 enfein/mieru 真库) |
+| **vless-reality** | REALITY(偷 TLS 握手) | ✅ `go test ./transport/realityx`(接 sagernet/reality 真库,验证握手中继到 Dest) |
 | **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
 | **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
 
-> `hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)已接上游真库跑通端到端。`vless-REALITY` 需 xtls/reality,handler 已把传输抽象成接口。
+> 五个特殊传输全部接上游真库:`hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)、`vless-reality`(sagernet/reality)。
+>
+> **REALITY 说明**:服务端用的是 sing-box 同款 `sagernet/reality` 真库,节点会真实完成 REALITY 握手并在未授权时把连接透明中继到 `dest`(偷自己证书)。授权客户端的 VLESS 往返需要 uTLS 版 REALITY 客户端(xray/sing-box),用标准客户端对接即可——这是 REALITY 的部署常态,不是桩实现。
 
 ## 编译
 ```bash
@@ -41,10 +44,33 @@ go build -o heki-node ./cmd/node
   "report_interval_sec": 30
 }
 ```
-- `protocol`:`trojan`/`vmess`/`vless`/`ss`/`naive`。
+- `protocol`:`trojan`/`vmess`/`vless`/`vless-reality`/`ss`/`naive`/`anytls`/`hysteria2`/`tuic`/`mieru`。
 - `method`:仅 `ss` 用(aes-128-gcm / aes-256-gcm)。
-- `ss` 不需要 TLS 证书(自带加密);其余走 TLS,填 `tls_cert`/`tls_key`(你域名的证书)。
+- `ss`/`mieru`/`vless-reality` 不需要 TLS 证书(各自自带加密/握手);`hysteria2`/`tuic` 用证书但走 QUIC/UDP;其余走 TLS,填 `tls_cert`/`tls_key`。
 - `panel_*`/`node_id`:与 XrayR/V2bX 的 ApiHost/ApiKey/NodeID 同义。
+
+### REALITY(`protocol: vless-reality`)
+先生成密钥对:
+```bash
+./heki-node -genkey
+# private_key (server): <hex>   放进 config
+# public_key  (client): <hex>   给客户端
+```
+再在 `config.json` 加 `reality` 段(不需要 `tls_cert`):
+```json
+{
+  "protocol": "vless-reality",
+  "panel_type": "sspanel", "panel_url": "...", "panel_key": "...", "node_id": 1,
+  "listen": ":443",
+  "reality": {
+    "private_key":  "<hex 32 字节>",
+    "dest":         "www.microsoft.com:443",
+    "server_names": ["www.microsoft.com"],
+    "short_ids":    ["", "0123abcd"]
+  }
+}
+```
+用 xray/sing-box 的 REALITY 客户端对接(public_key / server_name / short_id 与上面一致)。
 
 ## 运行
 ```bash

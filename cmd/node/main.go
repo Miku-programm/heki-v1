@@ -22,8 +22,10 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -32,27 +34,46 @@ import (
 
 	"heki/node"
 	"heki/server/proto/trojan"
+	"heki/transport/realityx"
 )
 
+type realityFileConfig struct {
+	PrivateKey  string   `json:"private_key"` // hex-encoded 32-byte x25519 key
+	Dest        string   `json:"dest"`        // borrowed TLS 1.3 site, host:port
+	ServerNames []string `json:"server_names"`
+	ShortIDs    []string `json:"short_ids"` // hex
+}
+
 type fileConfig struct {
-	Protocol          string `json:"protocol"`
-	Method            string `json:"method"`
-	PanelType         string `json:"panel_type"`
-	PanelURL          string `json:"panel_url"`
-	PanelKey          string `json:"panel_key"`
-	NodeID            int    `json:"node_id"`
-	Listen            string `json:"listen"`
-	TLSCert           string `json:"tls_cert"`
-	TLSKey            string `json:"tls_key"`
-	FallbackHost      string `json:"fallback_host"`
-	FallbackPort      int    `json:"fallback_port"`
-	SyncIntervalSec   int    `json:"sync_interval_sec"`
-	ReportIntervalSec int    `json:"report_interval_sec"`
+	Protocol          string             `json:"protocol"`
+	Method            string             `json:"method"`
+	PanelType         string             `json:"panel_type"`
+	PanelURL          string             `json:"panel_url"`
+	PanelKey          string             `json:"panel_key"`
+	NodeID            int                `json:"node_id"`
+	Listen            string             `json:"listen"`
+	TLSCert           string             `json:"tls_cert"`
+	TLSKey            string             `json:"tls_key"`
+	FallbackHost      string             `json:"fallback_host"`
+	FallbackPort      int                `json:"fallback_port"`
+	SyncIntervalSec   int                `json:"sync_interval_sec"`
+	ReportIntervalSec int                `json:"report_interval_sec"`
+	Reality           *realityFileConfig `json:"reality"`
 }
 
 func main() {
 	cfgPath := flag.String("c", "config.json", "path to config.json")
+	genKey := flag.Bool("genkey", false, "generate a REALITY x25519 key pair (hex) and exit")
 	flag.Parse()
+
+	if *genKey {
+		priv, pub, err := realityx.GenerateKeyPair()
+		if err != nil {
+			log.Fatalf("genkey: %v", err)
+		}
+		fmt.Printf("private_key (server): %s\npublic_key  (client): %s\n", hex.EncodeToString(priv), hex.EncodeToString(pub))
+		return
+	}
 
 	raw, err := os.ReadFile(*cfgPath)
 	if err != nil {
@@ -78,6 +99,18 @@ func main() {
 	}
 	if fc.FallbackHost != "" {
 		cfg.Fallback = &trojan.FallbackTarget{Host: fc.FallbackHost, Port: fc.FallbackPort}
+	}
+	if fc.Reality != nil {
+		priv, derr := hex.DecodeString(fc.Reality.PrivateKey)
+		if derr != nil {
+			log.Fatalf("reality private_key: %v", derr)
+		}
+		cfg.Reality = &node.RealityConfig{
+			PrivateKey:  priv,
+			ServerNames: fc.Reality.ServerNames,
+			ShortIDs:    fc.Reality.ShortIDs,
+			Dest:        fc.Reality.Dest,
+		}
 	}
 
 	n, err := node.New(cfg)

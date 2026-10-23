@@ -29,6 +29,7 @@ import (
 	"heki/transport/anytlsx"
 	"heki/transport/hy2"
 	"heki/transport/mierux"
+	"heki/transport/realityx"
 	"heki/transport/tuicx"
 )
 
@@ -52,6 +53,18 @@ type Config struct {
 	ReportInterval time.Duration
 
 	TLSConfig *tls.Config // overrides cert/key files (tests)
+
+	Reality *RealityConfig // required for protocol "vless-reality"
+}
+
+// RealityConfig holds the node-level REALITY parameters (operator-provided,
+// same shape as XrayR/xray: a private key, the borrowed Dest site, allowed
+// SNIs and short IDs).
+type RealityConfig struct {
+	PrivateKey  []byte   // 32-byte x25519 private key
+	ServerNames []string // allowed SNI (must include Dest's cert name)
+	ShortIDs    []string // allowed short IDs (hex)
+	Dest        string   // borrowed real TLS 1.3 site, host:port
 }
 
 type handlerAdapter interface {
@@ -108,6 +121,10 @@ type Node struct {
 	udpNew     func(cert tls.Certificate, pc net.PacketConn) (udpService, error)
 	udpSync    func(us []*panel.UserInfo) map[string]int
 	pc         net.PacketConn
+
+	// REALITY listener wrapper (protocol vless-reality): wraps the raw TCP
+	// listener with the real sagernet/reality handshake.
+	realityNew func(net.Listener) (net.Listener, error)
 
 	mu        sync.RWMutex
 	emailToID map[string]int
@@ -181,6 +198,37 @@ func (n *Node) buildHandler() error {
 		h := vless.NewHandler(nil, nil, nil, visionFallback(n.cfg.Fallback))
 		h.SetServerCallbacks(vless.ServerCallbacks{ReportTraffic: report})
 		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*vless.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				id, err := vless.ParseUUID(u.UUID)
+				if err != nil {
+					continue
+				}
+				out = append(out, &vless.User{Email: e, UUID: id})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
+	case "vless-reality":
+		if n.cfg.Reality == nil {
+			return fmt.Errorf("node: protocol vless-reality requires Reality config")
+		}
+		h := vless.NewHandler(nil, nil, nil, visionFallback(n.cfg.Fallback))
+		h.SetServerCallbacks(vless.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, false // REALITY terminates the transport, not TLS
+		rc := n.cfg.Reality
+		n.realityNew = func(inner net.Listener) (net.Listener, error) {
+			return realityx.NewListener(inner, realityx.Options{
+				PrivateKey:  rc.PrivateKey,
+				ServerNames: rc.ServerNames,
+				ShortIDs:    rc.ShortIDs,
+				Dest:        rc.Dest,
+			})
+		}
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*vless.User, 0, len(us))
 			m := map[string]int{}
@@ -314,7 +362,7 @@ func (n *Node) buildHandler() error {
 			return m
 		}
 	default:
-		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/anytls/hysteria2/tuic/mieru)", n.cfg.Protocol)
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/vless-reality/ss/naive/anytls/hysteria2/tuic/mieru)", n.cfg.Protocol)
 	}
 	return nil
 }
@@ -410,6 +458,14 @@ func (n *Node) Start() error {
 	}
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", n.cfg.Listen, err)
+	}
+	if n.realityNew != nil {
+		rln, rerr := n.realityNew(ln)
+		if rerr != nil {
+			_ = ln.Close()
+			return fmt.Errorf("reality listener: %w", rerr)
+		}
+		ln = rln
 	}
 	n.ln = ln
 	log.Printf("[INFO] [Node %d] %s listening on %s (tls=%v)", n.cfg.NodeID, n.cfg.Protocol, ln.Addr(), n.useTLS)
