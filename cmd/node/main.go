@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -74,6 +75,10 @@ type fileConfig struct {
 	DomainAuditDomains      string `json:"domain_audit_domains"` // comma-separated
 	DomainAuditLogDir       string `json:"domain_audit_log_dir"`
 	DomainAuditRetentionDay int    `json:"domain_audit_retention_days"`
+
+	// runtime tuning (heki supports GOGC / GOMEMLIMIT)
+	GCPercent  int `json:"gc_percent"`   // GOGC; 0 = leave default
+	MemLimitMB int `json:"mem_limit_mb"` // soft memory limit (GOMEMLIMIT); 0 = off
 }
 
 type hysteria2FileConfig struct {
@@ -113,6 +118,14 @@ func main() {
 	var fc fileConfig
 	if err := json.Unmarshal(raw, &fc); err != nil {
 		log.Fatalf("parse config: %v", err)
+	}
+
+	// runtime memory tuning (GOGC / GOMEMLIMIT). Env vars still take precedence.
+	if fc.GCPercent > 0 {
+		debug.SetGCPercent(fc.GCPercent)
+	}
+	if fc.MemLimitMB > 0 {
+		debug.SetMemoryLimit(int64(fc.MemLimitMB) * 1024 * 1024)
 	}
 
 	cfg := node.Config{

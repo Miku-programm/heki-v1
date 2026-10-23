@@ -102,6 +102,12 @@ func (d *Dialer) DialContext(ctx context.Context, meta Meta, host string, port i
 		conn, err = dialViaTrojan(ctx, nd, out, target, targetPort)
 	case "vless":
 		conn, err = dialViaVLESS(ctx, nd, out, target, targetPort)
+	case "ss", "shadowsocks":
+		conn, err = dialViaSS(ctx, nd, out, target, targetPort)
+	case "anytls":
+		conn, err = dialViaAnyTLS(ctx, out, target, targetPort)
+	case "vmess":
+		conn, err = dialViaVMess(ctx, nd, out, target, targetPort)
 	default:
 		d.audit(meta, host, ip, port, addr, out.Type, "unsupported")
 		return nil, fmt.Errorf("dataplane: unsupported outbound type %q", out.Type)

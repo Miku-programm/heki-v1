@@ -132,13 +132,13 @@ rules=["*"]
 type="direct"
 listen=""          # 出口网卡 IP(源绑定);留空由系统决定
 ```
-> 规则匹配支持 `domain:`/`domain-keyword:`/`full:`/`ip:`/`cidr:`/`port:`/`node_id:`/`regexp:`/`glob:`/裸串/`*`(`geosite:`/`geoip:` 需 .dat 文件,未内置→不命中)。出口已实现 `direct`/`block`/`redirect`/`socks`/`http`,以及**链式代理出站 `trojan`/`vless`**(TLS,`password`/`uuid`/`sni`/`skip_cert_verify`)。链式出站示例:
+> 规则匹配支持 `domain:`/`domain-keyword:`/`full:`/`ip:`/`cidr:`/`port:`/`node_id:`/`regexp:`/`glob:`/裸串/`*`(`geosite:`/`geoip:` 需 .dat 文件,未内置→不命中)。出口已实现 `direct`/`block`/`redirect`/`socks`/`http`,以及**链式代理出站 `trojan`/`vless`/`ss`/`vmess`/`anytls`**(按公开线格式实现)。链式出站字段:`password`(trojan/ss/vmess/anytls)、`uuid`(vless/vmess)、`cipher`(ss)、`sni`/`tls`/`skip_cert_verify`(vmess 走 TLS 时置 `tls=true`)。示例:
 > ```toml
 > [[routes.Outs]]
-> type="trojan"      # 或 vless
+> type="trojan"      # trojan/vless/ss/vmess/anytls
 > server="exit.example.com"
 > port=443
-> password="落地密码"  # vless 用 uuid="..."
+> password="落地密码"  # vless/vmess 用 uuid="..."; ss 另加 cipher="aes-256-gcm"
 > sni="exit.example.com"
 > skip_cert_verify=false
 > ```
@@ -165,6 +165,11 @@ config 里 `proxy_protocol=true`(可加 `force_proxy_protocol=true`):TCP/TLS 入
 config 里 `domain_audit_enable=true`、`domain_audit_domains=api.ip.sb,cidr:198.51.100.0/24,glob:check-*.example.com`、`domain_audit_log_dir`、`domain_audit_retention_days`。命中规则的连接按节点+日期写 JSONL(字段同 heki:`time/node_id/user_id/protocol/network/client_ip/target/target_host/target_ip/target_port/status`),非阻塞队列 + 短窗去重 + 按保留天清理。
 
 > 验证:`go test ./node/dataplane`(规则/路由/PROXY v1+v2/审计/策略单测)+ `go test ./node -run Dataplane`(AnyTLS 全链路:PROXY 真实 IP → 路由 direct → 审计落盘,断言 client_ip)+ `go test ./node -run Chained`(两节点链:client→anytls(A)→trojan/vless 出站→落地(B)→echo)。数据面已接入**全部 TCP/QUIC 协议**出站(trojan/vless/ss/vmess/naive/anytls/tuic/mieru;hysteria2 由 apernet 内部直连,未接)。
+
+### 性能与内存
+- **relay 缓冲池**:所有协议的双向转发走 `dataplane` 的 32KiB `sync.Pool` 缓冲(`Relay`/`RelayCopy`),避免每连接每方向各分配一块缓冲(高并发下显著降内存与 GC 压力)。
+- **审计写入**:按节点+日期**保持文件句柄常开**(仅跨日重开),不再每条记录 open/close;去重表有上限并按窗口清理,不会无限增长。
+- **GC 调参**:`config.json` 可配 `gc_percent`(= GOGC)、`mem_limit_mb`(= GOMEMLIMIT 软上限);环境变量 `GOGC`/`GOMEMLIMIT` 仍优先。
 
 ## 运行
 ```bash

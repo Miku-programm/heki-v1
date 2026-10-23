@@ -146,19 +146,8 @@ func (h *Handler) handleTCP(conn net.Conn, hdr *RequestHeader, user *User) error
 		return err
 	}
 
-	// Relay both directions; close both when either ends so neither copy hangs.
-	var up, down int64
-	done := make(chan struct{}, 2)
-	go func() { n, _ := io.Copy(upstream, inner); up = n; inner.Close(); upstream.Close(); done <- struct{}{} }()
-	go func() {
-		n, _ := io.Copy(inner, upstream)
-		down = n
-		inner.Close()
-		upstream.Close()
-		done <- struct{}{}
-	}()
-	<-done
-	<-done
+	// Relay both directions with pooled buffers; close both when either ends.
+	up, down := dataplane.Relay(inner, upstream)
 
 	h.mu.RLock()
 	report := h.callback.ReportTraffic

@@ -1,5 +1,7 @@
 # heki v1.2.8 —— 作者自有内核的重建工程(单一 go module)
 
+> ⚠️ **这不是 heki 的原始源代码。** heki 为闭源,原始源码不公开。本仓库是**行为等价的重建/重实现**:协议栈从剥离符号的二进制逆向重建;`heki-v1 WebAPI`、`routes.toml`/`dns.yml`、审计等照**官方公开文档**实现;特殊传输(hysteria2/tuic/anytls/mieru/reality)接**真实上游库**;链式出站等照协议**公开线格式**实现。可编译、可对接面板、有端到端测试,但**不等于** heki 内部源码,生产使用请自行评估。
+
 这是对 heki v1.2.8 **作者自有内核(`heki/*`)** 的人工重建,基于对其二进制的静态反编译(IDA/Hex-Rays),合并为一个可整体编译的 Go module。
 
 - 目标:`heki-v1.2.8`,SHA-256 `0ed51b5357dda79b02fcd0ac463b5ccf1ff9653d68a27334efa54904fa81450d`

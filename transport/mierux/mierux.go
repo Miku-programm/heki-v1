@@ -11,7 +11,6 @@ package mierux
 
 import (
 	"context"
-	"io"
 	"net"
 	"strconv"
 	"sync"
@@ -172,12 +171,7 @@ func (s *Server) handle(conn net.Conn, req *model.Request) {
 		return
 	}
 
-	var up, down int64
-	done := make(chan struct{}, 2)
-	go func() { n, _ := io.Copy(target, conn); up = n; conn.Close(); target.Close(); done <- struct{}{} }()
-	go func() { n, _ := io.Copy(conn, target); down = n; conn.Close(); target.Close(); done <- struct{}{} }()
-	<-done
-	<-done
+	up, down := dataplane.Relay(conn, target)
 
 	if email != "" && s.report != nil {
 		s.report(email, up, down)

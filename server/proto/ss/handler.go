@@ -193,13 +193,17 @@ func (h *Handler) relay(user *User, conn net.Conn, reader *aeadReader, salt []by
 	_, _ = conn.Write(respSalt)
 	writer := newAEADWriter(conn, respAEAD)
 
-	// Relay both directions; close both when either ends so neither copy hangs.
+	// Relay both directions with pooled buffers; close both when either ends.
 	var up, down int64
 	done := make(chan struct{}, 2)
-	go func() { n, _ := io.Copy(upstream, reader); up = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
 	go func() {
-		n, _ := io.Copy(writer, upstream)
-		down = n
+		up, _ = dataplane.RelayCopy(upstream, reader)
+		conn.Close()
+		upstream.Close()
+		done <- struct{}{}
+	}()
+	go func() {
+		down, _ = dataplane.RelayCopy(writer, upstream)
 		conn.Close()
 		upstream.Close()
 		done <- struct{}{}

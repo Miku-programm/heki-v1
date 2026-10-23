@@ -17,10 +17,13 @@ type Outbound struct {
 	Pass   string // socks/http auth
 
 	// proxy-outbound (chained) fields
-	Password       string // trojan password
-	UUID           string // vless uuid
+	Password       string // trojan / ss / vmess / anytls password
+	UUID           string // vless / vmess uuid
+	Cipher         string // ss cipher (aes-128-gcm / aes-256-gcm / chacha20-ietf-poly1305)
+	AlterID        int    // vmess alterId (0 = AEAD)
 	SNI            string // TLS server name
 	Flow           string // vless flow (e.g. xtls-rprx-vision)
+	TLS            bool   // wrap the outbound in TLS (vmess/ss over TLS)
 	SkipCertVerify bool
 }
 

@@ -42,7 +42,19 @@ type Auditor struct {
 	nowFn     func() time.Time
 	openFile  func(path string) (writer, error)
 	closeOnce sync.Once
+
+	// touched only by the single loop goroutine (and Close after it returns)
+	curFile writer
+	curName string
 }
+
+// dedupWindow is the short window within which identical (user, protocol,
+// network, target) records are collapsed.
+const dedupWindow = 5 * time.Second
+
+// dedupMax caps the dedup map so it cannot grow without bound; when exceeded,
+// entries older than the window are pruned.
+const dedupMax = 8192
 
 type writer interface {
 	Write([]byte) (int, error)
@@ -94,9 +106,16 @@ func (a *Auditor) Record(r Record) {
 	key := fmt.Sprintf("%d|%s|%s|%s", r.UserID, r.Protocol, r.Network, r.Target)
 	a.mu.Lock()
 	now := a.nowFn()
-	if last, ok := a.dedup[key]; ok && now.Sub(last) < 5*time.Second {
+	if last, ok := a.dedup[key]; ok && now.Sub(last) < dedupWindow {
 		a.mu.Unlock()
 		return
+	}
+	if len(a.dedup) >= dedupMax {
+		for k, t := range a.dedup {
+			if now.Sub(t) >= dedupWindow {
+				delete(a.dedup, k)
+			}
+		}
 	}
 	a.dedup[key] = now
 	a.mu.Unlock()
@@ -109,27 +128,46 @@ func (a *Auditor) Record(r Record) {
 
 func (a *Auditor) loop() {
 	defer a.wg.Done()
+	defer func() {
+		if a.curFile != nil {
+			a.curFile.Close()
+			a.curFile = nil
+		}
+	}()
 	for r := range a.queue {
 		a.write(r)
 	}
 }
 
+// write appends one record, keeping the current day's file open (reopened only
+// when the node/date-derived name changes) to avoid an open+close per record.
+// Only the single loop goroutine touches curFile/curName, so no lock is needed.
 func (a *Auditor) write(r Record) {
 	if a.dir == "" || a.dir == "false" {
 		return
 	}
-	if err := os.MkdirAll(a.dir, 0o755); err != nil {
+	name := fmt.Sprintf("domain-audit-node-%d-%s.jsonl", r.NodeID, a.nowFn().UTC().Format("2006-01-02"))
+	if name != a.curName {
+		if a.curFile != nil {
+			a.curFile.Close()
+			a.curFile = nil
+		}
+		if err := os.MkdirAll(a.dir, 0o755); err != nil {
+			return
+		}
+		f, err := a.openFile(filepath.Join(a.dir, name))
+		if err != nil {
+			a.curName = ""
+			return
+		}
+		a.curFile, a.curName = f, name
+	}
+	if a.curFile == nil {
 		return
 	}
-	date := a.nowFn().UTC().Format("2006-01-02")
-	name := fmt.Sprintf("domain-audit-node-%d-%s.jsonl", r.NodeID, date)
-	f, err := a.openFile(filepath.Join(a.dir, name))
-	if err != nil {
-		return
-	}
-	defer f.Close()
 	b, _ := json.Marshal(r)
-	_, _ = f.Write(append(b, '\n'))
+	b = append(b, '\n')
+	_, _ = a.curFile.Write(b)
 }
 
 // Close flushes and stops the auditor. Safe to call more than once.

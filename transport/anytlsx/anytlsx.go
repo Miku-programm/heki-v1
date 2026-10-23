@@ -7,7 +7,6 @@ package anytlsx
 
 import (
 	"context"
-	"io"
 	"net"
 	"time"
 
@@ -119,12 +118,7 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	}
 	defer upstream.Close()
 
-	var up, down int64
-	done := make(chan struct{}, 2)
-	go func() { n, _ := io.Copy(upstream, conn); up = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
-	go func() { n, _ := io.Copy(conn, upstream); down = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
-	<-done
-	<-done
+	up, down := dataplane.Relay(conn, upstream)
 
 	if ok && h.s.report != nil && email != "" {
 		h.s.report(email, up, down)

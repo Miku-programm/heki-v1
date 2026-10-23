@@ -94,7 +94,9 @@ func (h *Handler) relay(email string, conn, upstream net.Conn, cr io.Reader, cw 
 // copyBufferWithRefresh copies src->dst, refreshing deadlineConn's read/write
 // deadline on progress so idle connections eventually time out.
 func copyBufferWithRefresh(dst io.Writer, src io.Reader, deadlineConn net.Conn) int64 {
-	buf := make([]byte, 32*1024)
+	bp := dataplane.GetBuffer()
+	defer dataplane.PutBuffer(bp)
+	buf := *bp
 	var total int64
 	for {
 		if deadlineConn != nil {
