@@ -3,6 +3,7 @@ module heki
 go 1.26
 
 require (
+	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/hysteria/core/v2 v2.12.2
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-quic v0.7.0

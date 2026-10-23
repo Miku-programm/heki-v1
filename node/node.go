@@ -25,6 +25,7 @@ import (
 	"heki/server/proto/trojan"
 	"heki/server/proto/vless"
 	"heki/server/proto/vmess"
+	"heki/transport/anytlsx"
 	"heki/transport/hy2"
 	"heki/transport/tuicx"
 )
@@ -243,6 +244,23 @@ func (n *Node) buildHandler() error {
 			}
 			return m
 		}
+	case "anytls":
+		h, err := anytlsx.New(report)
+		if err != nil {
+			return err
+		}
+		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*anytlsx.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &anytlsx.User{Email: e, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
 	case "tuic":
 		n.useUDP = true
 		n.udpNew = func(cert tls.Certificate, pc net.PacketConn) (udpService, error) {
@@ -266,7 +284,7 @@ func (n *Node) buildHandler() error {
 			return m
 		}
 	default:
-		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/hysteria2/tuic)", n.cfg.Protocol)
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/anytls/hysteria2/tuic)", n.cfg.Protocol)
 	}
 	return nil
 }
