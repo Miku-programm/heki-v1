@@ -181,12 +181,13 @@ func (h *Handler) relay(user *User, conn net.Conn, reader *aeadReader, salt []by
 	_, _ = conn.Write(respSalt)
 	writer := newAEADWriter(conn, respAEAD)
 
+	// Relay both directions; close both when either ends so neither copy hangs.
 	var up, down int64
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); n, _ := io.Copy(upstream, reader); up = n }()
-	go func() { defer wg.Done(); n, _ := io.Copy(writer, upstream); down = n }()
-	wg.Wait()
+	done := make(chan struct{}, 2)
+	go func() { n, _ := io.Copy(upstream, reader); up = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
+	go func() { n, _ := io.Copy(writer, upstream); down = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
+	<-done
+	<-done
 
 	h.mu.RLock()
 	report := h.callback.ReportTraffic

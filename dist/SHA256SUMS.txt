@@ -1,0 +1,4 @@
+48f3fabc9411254e2e9e53b03cb3c72fe7bff367c05a36d816619e865e34bd1f  heki-node-darwin-arm64
+c83fbbebd0905fafe65083c1ee4b9dbbaa0517c60668e75c3caada4c32bf5b72  heki-node-linux-amd64
+b02aa82a5d7a7d7bb6a9c15e33e9144bb5d942f6fc45ac87c059b3b3a5d1e8ae  heki-node-linux-arm64
+747ecfda43dcf8d3fa924487787383c68e9152b2ff6a726d00c059f5bb8f322c  heki-selfcheck-linux-amd64

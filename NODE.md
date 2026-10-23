@@ -1,6 +1,17 @@
-# 跑一个节点(trojan over TLS,对接面板)
+# 跑一个节点(对接面板)
 
-`cmd/node` 是在重建库之上打通的**最小可运行节点**:从面板拉用户 → TLS 监听 → trojan 鉴权 → relay → 定时上报流量。目前支持 **trojan / TCP+TLS**,面板支持 **sspanel / xboard / ppanel / metron / hekiv1**(端点见 `panel/`)。
+`cmd/node` 是在重建库之上打通的**可运行节点**:从面板拉用户 → 监听 → 鉴权 → relay → 定时上报流量。
+
+## 可运行的协议(已端到端验证)
+| 协议 | 传输 | 端到端测试 |
+|---|---|---|
+| **trojan** | TCP+TLS | ✅ `go test ./node -run Trojan` |
+| **vless**(非 REALITY) | TCP+TLS | ✅ `go test ./node -run VLESS` |
+| **ss**(aes-128/256-gcm) | TCP(自带加密) | ✅ `go test ./node -run SS` |
+| **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
+| **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
+
+> `hysteria2 / tuic / mieru / vless-REALITY / anytls` 依赖 QUIC / REALITY / 私有会话传输,**需接入上游库**(xray-core/sing/apernet/sing-quic/sing-anytls),未在 node 里实现——这些 handler 已把传输抽象成接口,接上真库即可。
 
 ## 编译
 ```bash
@@ -11,6 +22,8 @@ go build -o heki-node ./cmd/node
 ## 配置 `config.json`
 ```json
 {
+  "protocol":   "trojan",
+  "method":     "aes-256-gcm",
   "panel_type": "sspanel",
   "panel_url":  "https://your-panel.com",
   "panel_key":  "你的通信密钥",
@@ -24,20 +37,19 @@ go build -o heki-node ./cmd/node
   "report_interval_sec": 30
 }
 ```
-- `panel_type`:面板类型。`panel_url`/`panel_key`/`node_id`:对接参数(和 XrayR/V2bX 的 ApiHost/ApiKey/NodeID 同义)。
-- `tls_cert`/`tls_key`:节点的 TLS 证书(用你域名的证书;可用 acme.sh/Caddy 签发)。
-- `fallback_*`:鉴权失败时透明回落的真站(抗主动探测)。
+- `protocol`:`trojan`/`vmess`/`vless`/`ss`/`naive`。
+- `method`:仅 `ss` 用(aes-128-gcm / aes-256-gcm)。
+- `ss` 不需要 TLS 证书(自带加密);其余走 TLS,填 `tls_cert`/`tls_key`(你域名的证书)。
+- `panel_*`/`node_id`:与 XrayR/V2bX 的 ApiHost/ApiKey/NodeID 同义。
 
 ## 运行
 ```bash
 ./heki-node -c config.json
 ```
-启动后它会:拉取用户、在 `:443` 起 TLS 监听、接受 trojan 客户端、鉴权通过就 relay、按 `report_interval_sec` 把流量上报回面板。客户端用标准 **Trojan** 客户端(密码=面板里该用户的密码/UUID,取决于面板字段)。
+用对应协议的**标准客户端**连(trojan/vmess/vless/ss/naive),密码/UUID 取面板里该用户的字段。
 
 ## 已验证
-`go test ./node/` 跑了一个**真实端到端闭环**(假面板 + 真 TLS trojan 客户端 + echo 上游):拉到用户、鉴权通过、数据往返、流量回报面板,`PASS`。
+`go test ./...` 全过,其中 `./node` 跑了 **trojan/vless/ss 三条真实端到端闭环**(假面板 + 真客户端 + echo 上游):拉用户 → 鉴权 → 数据往返 → 流量回报面板。
 
-## 范围与后续
-- 现在只打通了 **trojan/TCP+TLS** 这一条。vmess/vless(非 REALITY)over TCP+TLS 可按同样方式接(handler 已在,缺监听+accounting 接线);REALITY/QUIC 系(vless-reality/hysteria2/tuic/mieru)还需补被抽象的传输层。
-- 在线 IP 上报(aliveip)、限速(speedlimit)回调已在 handler 预留,node 里按需接 `ReportAliveIP`/`CheckIPLimit`/`SpeedLimit` 即可。
-- 这是行为重建,非原始 heki;生产使用请自行评估。
+## 范围声明
+行为重建,非原始 heki 源码。QUIC/REALITY 系需上游库,生产使用请自行评估。

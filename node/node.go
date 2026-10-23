@@ -1,15 +1,14 @@
-// Package node ties the reconstructed pieces into a minimal, runnable proxy
-// node: it pulls users from a billing panel, listens for TLS connections, runs a
-// protocol handler (trojan here), relays traffic, and reports usage back.
-//
-// This is the first end-to-end "minimal closed loop" over the library packages:
+// Package node ties the reconstructed pieces into a runnable proxy node: it
+// pulls users from a billing panel, listens (TLS or raw TCP depending on the
+// protocol), runs a protocol handler, relays traffic, and reports usage back.
 //
 //	panel GetUsers -> handler.UpdateUsers
-//	tls.Listen     -> handler.HandleConn (auth + relay)
+//	listen         -> handler.HandleConn (auth + relay)
 //	traffic         -> accounting -> panel.ReportTraffic (periodic)
 //
-// It demonstrates that the reconstruction can actually run against a panel for
-// trojan/TCP+TLS. Other protocols/transports are added the same way.
+// Runnable protocols (TCP / TLS / HTTP transport): trojan, vmess, vless
+// (non-REALITY), ss (AEAD), naive. QUIC/REALITY/mieru/anytls need their upstream
+// transport libraries and are not wired here.
 package node
 
 import (
@@ -21,30 +20,39 @@ import (
 	"time"
 
 	"heki/panel"
+	"heki/server/proto/naive"
+	"heki/server/proto/ss"
 	"heki/server/proto/trojan"
+	"heki/server/proto/vless"
+	"heki/server/proto/vmess"
 )
 
 // Config is the node configuration.
 type Config struct {
-	PanelType string // sspanel / xboard / ppanel / metron / hekiv1
+	Protocol string // trojan(default) / vmess / vless / ss / naive
+	Method   string // ss cipher method (aes-256-gcm default)
+
+	PanelType string
 	PanelURL  string
 	PanelKey  string
 	NodeID    int
 
-	Listen  string // e.g. ":443" or "127.0.0.1:0"
-	TLSCert string // path to cert PEM (ignored if TLSConfig set)
-	TLSKey  string // path to key PEM
+	Listen  string
+	TLSCert string
+	TLSKey  string
 
-	Fallback *trojan.FallbackTarget // real-site fallback for bad auth
+	Fallback *trojan.FallbackTarget
 
-	SyncInterval   time.Duration // user pull period
-	ReportInterval time.Duration // traffic push period
+	SyncInterval   time.Duration
+	ReportInterval time.Duration
 
-	// TLSConfig overrides cert/key file loading (used in tests).
-	TLSConfig *tls.Config
+	TLSConfig *tls.Config // overrides cert/key files (tests)
 }
 
-// accounting accumulates per-user traffic between report pushes.
+type handlerAdapter interface {
+	HandleConn(net.Conn) error
+}
+
 type accounting struct {
 	mu   sync.Mutex
 	up   map[string]int64
@@ -54,14 +62,12 @@ type accounting struct {
 func newAccounting() *accounting {
 	return &accounting{up: map[string]int64{}, down: map[string]int64{}}
 }
-
 func (a *accounting) add(email string, up, down int64) {
 	a.mu.Lock()
 	a.up[email] += up
 	a.down[email] += down
 	a.mu.Unlock()
 }
-
 func (a *accounting) drain() map[string][2]int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -69,8 +75,7 @@ func (a *accounting) drain() map[string][2]int64 {
 	for e, u := range a.up {
 		out[e] = [2]int64{u, a.down[e]}
 	}
-	a.up = map[string]int64{}
-	a.down = map[string]int64{}
+	a.up, a.down = map[string]int64{}, map[string]int64{}
 	return out
 }
 
@@ -78,8 +83,10 @@ func (a *accounting) drain() map[string][2]int64 {
 type Node struct {
 	cfg     Config
 	client  panel.PanelClient
-	handler *trojan.Handler
 	acct    *accounting
+	handler handlerAdapter
+	syncFn  func([]*panel.UserInfo) map[string]int // applies users, returns email->id
+	useTLS  bool
 
 	mu        sync.RWMutex
 	emailToID map[string]int
@@ -89,9 +96,14 @@ type Node struct {
 	once sync.Once
 }
 
-// New builds a node and wires the panel client and the trojan handler's
-// traffic callback into the accounting layer.
+// New builds a node for the configured protocol.
 func New(cfg Config) (*Node, error) {
+	if cfg.Protocol == "" {
+		cfg.Protocol = "trojan"
+	}
+	if cfg.Method == "" {
+		cfg.Method = "aes-256-gcm"
+	}
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = 60 * time.Second
 	}
@@ -102,24 +114,127 @@ func New(cfg Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{
-		cfg:       cfg,
-		client:    client,
-		acct:      newAccounting(),
-		emailToID: map[string]int{},
-		stop:      make(chan struct{}),
+	n := &Node{cfg: cfg, client: client, acct: newAccounting(), emailToID: map[string]int{}, stop: make(chan struct{})}
+	if err := n.buildHandler(); err != nil {
+		return nil, err
 	}
-	n.handler = trojan.NewHandler(nil, cfg.Fallback)
-	n.handler.SetServerCallbacks(trojan.ServerCallbacks{
-		ReportTraffic: func(email string, up, down int64) { n.acct.add(email, up, down) },
-	})
 	return n, nil
 }
 
-// Start pulls the initial user set, opens the TLS listener, and launches the
-// sync / report / accept loops.
+// buildHandler constructs the protocol handler, its user-sync adapter, and
+// whether it needs TLS.
+func (n *Node) buildHandler() error {
+	report := func(email string, up, down int64) { n.acct.add(email, up, down) }
+	switch n.cfg.Protocol {
+	case "trojan":
+		h := trojan.NewHandler(nil, n.cfg.Fallback)
+		h.SetServerCallbacks(trojan.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*trojan.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &trojan.User{Email: e, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
+	case "vmess":
+		h := vmess.NewHandler(nil, "", 0)
+		h.SetServerCallbacks(vmess.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*vmess.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &vmess.User{Email: e, UUID: vmess.ParseUUID(u.UUID)})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
+	case "vless":
+		h := vless.NewHandler(nil, nil, nil, visionFallback(n.cfg.Fallback))
+		h.SetServerCallbacks(vless.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*vless.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				id, err := vless.ParseUUID(u.UUID)
+				if err != nil {
+					continue
+				}
+				out = append(out, &vless.User{Email: e, UUID: id})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
+	case "ss":
+		h, err := ss.NewHandler(n.cfg.Method, "", nil)
+		if err != nil {
+			return err
+		}
+		h.SetServerCallbacks(ss.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, false // SS carries its own encryption
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*ss.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &ss.User{Email: e, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			_ = h.UpdateUsers(out)
+			return m
+		}
+	case "naive":
+		h := naive.NewHandler(nil)
+		h.SetServerCallbacks(naive.ServerCallbacks{ReportTraffic: report})
+		n.handler, n.useTLS = h, true
+		n.syncFn = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*naive.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &naive.User{Email: e, Username: e, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			h.UpdateUsers(out)
+			return m
+		}
+	default:
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive)", n.cfg.Protocol)
+	}
+	return nil
+}
+
+func emailOf(u *panel.UserInfo) string {
+	if u.Email != "" {
+		return u.Email
+	}
+	return fmt.Sprintf("user-%d", u.ID)
+}
+func pwOf(u *panel.UserInfo) string {
+	if u.Password != "" {
+		return u.Password
+	}
+	return u.UUID
+}
+func visionFallback(f *trojan.FallbackTarget) *vless.FallbackTarget {
+	if f == nil {
+		return nil
+	}
+	return &vless.FallbackTarget{Host: f.Host, Port: f.Port}
+}
+
+// Start pulls users, opens the listener (TLS or raw), and launches the loops.
 func (n *Node) Start() error {
-	// node config is optional for the minimal loop; log and continue on error.
 	if _, err := n.client.GetNodeInfo(); err != nil {
 		log.Printf("[WARN] [Node %d] get node config: %v", n.cfg.NodeID, err)
 	}
@@ -127,20 +242,26 @@ func (n *Node) Start() error {
 		return fmt.Errorf("initial user sync: %w", err)
 	}
 
-	tlsCfg := n.cfg.TLSConfig
-	if tlsCfg == nil {
-		cert, err := tls.LoadX509KeyPair(n.cfg.TLSCert, n.cfg.TLSKey)
-		if err != nil {
-			return fmt.Errorf("load tls cert: %w", err)
+	var ln net.Listener
+	var err error
+	if n.useTLS {
+		tlsCfg := n.cfg.TLSConfig
+		if tlsCfg == nil {
+			cert, cerr := tls.LoadX509KeyPair(n.cfg.TLSCert, n.cfg.TLSKey)
+			if cerr != nil {
+				return fmt.Errorf("load tls cert: %w", cerr)
+			}
+			tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}}
 		}
-		tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}}
+		ln, err = tls.Listen("tcp", n.cfg.Listen, tlsCfg)
+	} else {
+		ln, err = net.Listen("tcp", n.cfg.Listen)
 	}
-	ln, err := tls.Listen("tcp", n.cfg.Listen, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", n.cfg.Listen, err)
 	}
 	n.ln = ln
-	log.Printf("[INFO] [Node %d] listening on %s (trojan/TLS)", n.cfg.NodeID, ln.Addr())
+	log.Printf("[INFO] [Node %d] %s listening on %s (tls=%v)", n.cfg.NodeID, n.cfg.Protocol, ln.Addr(), n.useTLS)
 
 	go n.syncLoop()
 	go n.reportLoop()
@@ -148,7 +269,6 @@ func (n *Node) Start() error {
 	return nil
 }
 
-// Addr reports the actual listen address (useful when Listen uses :0).
 func (n *Node) Addr() net.Addr {
 	if n.ln == nil {
 		return nil
@@ -160,10 +280,6 @@ func (n *Node) acceptLoop() {
 	for {
 		conn, err := n.ln.Accept()
 		if err != nil {
-			select {
-			case <-n.stop:
-			default:
-			}
 			return
 		}
 		go func() {
@@ -190,28 +306,16 @@ func (n *Node) syncLoop() {
 	}
 }
 
-// syncUsers pulls the panel user set into the trojan handler and refreshes the
-// email->id map used for traffic reporting.
 func (n *Node) syncUsers() error {
 	users, err := n.client.GetUsers()
 	if err != nil {
 		return err
 	}
-	tu := make([]*trojan.User, 0, len(users))
-	m := make(map[string]int, len(users))
-	for _, u := range users {
-		email := u.Email
-		if email == "" {
-			email = fmt.Sprintf("user-%d", u.ID)
-		}
-		tu = append(tu, &trojan.User{Email: email, Password: u.Password})
-		m[email] = u.ID
-	}
-	n.handler.UpdateUsers(tu)
+	m := n.syncFn(users)
 	n.mu.Lock()
 	n.emailToID = m
 	n.mu.Unlock()
-	log.Printf("[INFO] [Node %d] synced %d users", n.cfg.NodeID, len(tu))
+	log.Printf("[INFO] [Node %d] synced %d users", n.cfg.NodeID, len(m))
 	return nil
 }
 
@@ -229,7 +333,6 @@ func (n *Node) reportLoop() {
 	}
 }
 
-// reportTraffic drains the accumulator and pushes a batch to the panel.
 func (n *Node) reportTraffic() {
 	batch := n.acct.drain()
 	if len(batch) == 0 {
@@ -251,7 +354,6 @@ func (n *Node) reportTraffic() {
 	}
 }
 
-// Stop shuts down the node.
 func (n *Node) Stop() {
 	n.once.Do(func() {
 		close(n.stop)

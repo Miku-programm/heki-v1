@@ -35,6 +35,8 @@ import (
 )
 
 type fileConfig struct {
+	Protocol          string `json:"protocol"`
+	Method            string `json:"method"`
 	PanelType         string `json:"panel_type"`
 	PanelURL          string `json:"panel_url"`
 	PanelKey          string `json:"panel_key"`
@@ -62,6 +64,8 @@ func main() {
 	}
 
 	cfg := node.Config{
+		Protocol:       fc.Protocol,
+		Method:         fc.Method,
 		PanelType:      fc.PanelType,
 		PanelURL:       fc.PanelURL,
 		PanelKey:       fc.PanelKey,

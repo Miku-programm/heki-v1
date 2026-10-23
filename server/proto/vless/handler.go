@@ -132,12 +132,18 @@ func (h *Handler) handleTCP(conn net.Conn, hdr *RequestHeader, user *User) error
 		inner = newVisionConn(conn, user.UUID)
 	}
 
+	// VLESS response header: version byte + 0 addon length, sent once before data.
+	if _, err := inner.Write([]byte{hdr.Version, 0x00}); err != nil {
+		return err
+	}
+
+	// Relay both directions; close both when either ends so neither copy hangs.
 	var up, down int64
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); n, _ := io.Copy(upstream, inner); up = n }()
-	go func() { defer wg.Done(); n, _ := io.Copy(inner, upstream); down = n }()
-	wg.Wait()
+	done := make(chan struct{}, 2)
+	go func() { n, _ := io.Copy(upstream, inner); up = n; inner.Close(); upstream.Close(); done <- struct{}{} }()
+	go func() { n, _ := io.Copy(inner, upstream); down = n; inner.Close(); upstream.Close(); done <- struct{}{} }()
+	<-done
+	<-done
 
 	h.mu.RLock()
 	report := h.callback.ReportTraffic
