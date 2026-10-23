@@ -108,6 +108,11 @@ go build -o heki-node ./cmd/node
 ```
 > 已验证:`go test ./node -run Hysteria2Obfs`(两端真 Salamander 混淆跑通 QUIC 往返)。SS `chacha20-ietf-poly1305` 也补齐:`go test ./node -run SSChaCha20`。
 
+### 更多协议细节(按文档补齐)
+- **TUIC 参数**:`config.json` 加 `tuic` 段可配 `congestion_control`(默认 `cubic`,可选 `bbr`/`new_reno`)、`zero_rtt_handshake`、`auth_timeout_sec`、`heartbeat_sec`、`udp_timeout_sec`。验证 `go test ./node -run TUICZeroRTT`(0-RTT + bbr 路径跑通)。
+- **AnyTLS UoT(UDP over TCP)**:`anytls` 现支持 UDP——客户端按 sing UoT(magic 地址 `sp.v2.udp-over-tcp.arpa` + `uot.Request`)发包,节点中继到真实 UDP 目标并计流量。验证 `go test ./node -run AnyTLSUoT`(真数据报往返)。
+- **VMess alterId**:`alterId==0` 走 VMessAEAD;保留 `alterId>0` 则按 heki 行为锁定到 **VMessMD5-only**(该用户从 AEAD 匹配中排除,避免 AEAD/MD5 混跑),遗留认证为 `HMAC-MD5(id, 时间戳)`(主 UUID + AlterID 链,带时钟窗口)。验证 `go test ./server/proto/vmess -run AlterIDModeLock`。遗留 AES-CFB 请求体已废弃、未接线——按文档建议订阅里直接删掉 alterId 走 AEAD。
+
 ## 运行
 ```bash
 ./heki-node -c config.json

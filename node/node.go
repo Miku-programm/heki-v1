@@ -57,6 +57,17 @@ type Config struct {
 	Reality *RealityConfig // required for protocol "vless-reality"
 
 	Hysteria2 *Hysteria2Config // optional tuning for protocol "hysteria2"
+	TUIC      *TUICConfig      // optional tuning for protocol "tuic"
+}
+
+// TUICConfig holds optional TUIC tuning, matching heki's tuic knobs
+// (congestion_control, zero_rtt_handshake, auth_timeout, heartbeat).
+type TUICConfig struct {
+	CongestionControl string // cubic (default) / new_reno / bbr
+	ZeroRTTHandshake  bool
+	AuthTimeoutSec    int
+	HeartbeatSec      int
+	UDPTimeoutSec     int
 }
 
 // Hysteria2Config holds optional Hysteria2 tuning (Salamander obfuscation and
@@ -329,7 +340,17 @@ func (n *Node) buildHandler() error {
 	case "tuic":
 		n.useUDP = true
 		n.udpNew = func(cert tls.Certificate, pc net.PacketConn) (udpService, error) {
-			return tuicx.New(cert, pc, report)
+			var opt tuicx.Options
+			if tc := n.cfg.TUIC; tc != nil {
+				opt = tuicx.Options{
+					CongestionControl: tc.CongestionControl,
+					ZeroRTTHandshake:  tc.ZeroRTTHandshake,
+					AuthTimeout:       time.Duration(tc.AuthTimeoutSec) * time.Second,
+					Heartbeat:         time.Duration(tc.HeartbeatSec) * time.Second,
+					UDPTimeout:        time.Duration(tc.UDPTimeoutSec) * time.Second,
+				}
+			}
+			return tuicx.New(cert, pc, report, opt)
 		}
 		n.udpSync = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*tuicx.User, 0, len(us))

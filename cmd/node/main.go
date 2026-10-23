@@ -60,12 +60,21 @@ type fileConfig struct {
 	ReportIntervalSec int                  `json:"report_interval_sec"`
 	Reality           *realityFileConfig   `json:"reality"`
 	Hysteria2         *hysteria2FileConfig `json:"hysteria2"`
+	TUIC              *tuicFileConfig      `json:"tuic"`
 }
 
 type hysteria2FileConfig struct {
 	ObfsPassword string `json:"obfs_password"` // Salamander PSK (obfs=salamander)
 	UpMbps       int    `json:"up_mbps"`
 	DownMbps     int    `json:"down_mbps"`
+}
+
+type tuicFileConfig struct {
+	CongestionControl string `json:"congestion_control"` // cubic (default) / new_reno / bbr
+	ZeroRTTHandshake  bool   `json:"zero_rtt_handshake"`
+	AuthTimeoutSec    int    `json:"auth_timeout_sec"`
+	HeartbeatSec      int    `json:"heartbeat_sec"`
+	UDPTimeoutSec     int    `json:"udp_timeout_sec"`
 }
 
 func main() {
@@ -124,6 +133,15 @@ func main() {
 			ObfsPassword: fc.Hysteria2.ObfsPassword,
 			UpMbps:       fc.Hysteria2.UpMbps,
 			DownMbps:     fc.Hysteria2.DownMbps,
+		}
+	}
+	if fc.TUIC != nil {
+		cfg.TUIC = &node.TUICConfig{
+			CongestionControl: fc.TUIC.CongestionControl,
+			ZeroRTTHandshake:  fc.TUIC.ZeroRTTHandshake,
+			AuthTimeoutSec:    fc.TUIC.AuthTimeoutSec,
+			HeartbeatSec:      fc.TUIC.HeartbeatSec,
+			UDPTimeoutSec:     fc.TUIC.UDPTimeoutSec,
 		}
 	}
 

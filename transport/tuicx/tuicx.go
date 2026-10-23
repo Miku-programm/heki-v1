@@ -34,6 +34,16 @@ type User struct {
 	Password string
 }
 
+// Options configures the TUIC server. Zero values fall back to heki's defaults
+// (cubic congestion control, 3s auth timeout, 10s heartbeat).
+type Options struct {
+	CongestionControl string        // cubic (default) / new_reno / bbr
+	ZeroRTTHandshake  bool          // allow 0-RTT (ignore for anti-replay)
+	AuthTimeout       time.Duration // default 3s
+	Heartbeat         time.Duration // default 10s
+	UDPTimeout        time.Duration // UDP association idle timeout
+}
+
 // Server wraps the sing-quic TUIC service.
 type Server struct {
 	svc    *tuic.Service[int]
@@ -47,21 +57,32 @@ type Server struct {
 }
 
 // New builds a real TUIC server over pc (a UDP PacketConn). report is called
-// with (email, up, down) as streams finish.
-func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int64)) (*Server, error) {
+// with (email, up, down) as streams finish. opt is optional tuning.
+func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int64), opt Options) (*Server, error) {
 	s := &Server{pc: pc, report: report, email: map[int]string{}, done: make(chan struct{})}
 	std := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 		NextProtos:   []string{"h3"}, // TUIC convention; clients must match
 	}
+	cc := opt.CongestionControl
+	if cc == "" {
+		cc = "cubic" // heki's default (per docs); client picks its own
+	}
+	authTimeout := opt.AuthTimeout
+	if authTimeout == 0 {
+		authTimeout = 3 * time.Second
+	}
 	svc, err := tuic.NewService[int](tuic.ServiceOptions{
 		Context:           context.Background(),
 		Logger:            logger.NOP(),
 		TLSConfig:         &singTLS{std: std},
 		Handler:           &handler{s: s},
-		CongestionControl: "cubic", // heki's default (per docs); client picks its own
-		AuthTimeout:       3 * time.Second,
+		CongestionControl: cc,
+		ZeroRTTHandshake:  opt.ZeroRTTHandshake,
+		AuthTimeout:       authTimeout,
+		Heartbeat:         opt.Heartbeat,
+		UDPTimeout:        opt.UDPTimeout,
 	})
 	if err != nil {
 		return nil, err

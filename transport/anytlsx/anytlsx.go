@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
 	anytls "github.com/anytls/sing-anytls"
 	"github.com/anytls/sing-anytls/padding"
@@ -16,7 +17,11 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
 )
+
+// udpIdleTimeout bounds how long a UoT UDP association waits with no traffic.
+const udpIdleTimeout = 2 * time.Minute
 
 // User is an AnyTLS account (auth = password; Email is the reporting key).
 type User struct {
@@ -67,8 +72,19 @@ func (s *Server) UpdateUsers(users []*User) {
 type handler struct{ s *Server }
 
 func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	email, _ := auth.UserFromContext[string](ctx)
+
+	// UDP-over-TCP: AnyTLS carries UDP as a stream to a magic destination.
+	if destination.Fqdn == uot.MagicAddress || destination.Fqdn == uot.LegacyMagicAddress {
+		h.relayUoT(conn, destination.Fqdn == uot.MagicAddress, email)
+		if onClose != nil {
+			onClose(nil)
+		}
+		return
+	}
+
 	defer conn.Close()
-	email, ok := auth.UserFromContext[string](ctx)
+	ok := email != ""
 
 	upstream, err := net.Dial("tcp", destination.String())
 	if err != nil {
@@ -91,5 +107,79 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	}
 	if onClose != nil {
 		onClose(nil)
+	}
+}
+
+// relayUoT handles an AnyTLS UDP-over-TCP association: it reads the UoT request
+// (v2) off the stream, then relays datagrams between the stream and a real UDP
+// socket, reporting byte counts.
+func (h *handler) relayUoT(conn net.Conn, v2 bool, email string) {
+	defer conn.Close()
+
+	req := uot.Request{}
+	if v2 {
+		r, err := uot.ReadRequest(conn)
+		if err != nil {
+			return
+		}
+		req = *r
+	}
+	uc := uot.NewConn(conn, req)
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		return
+	}
+	defer udpConn.Close()
+	_ = udpConn.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+
+	var up, down int64
+	done := make(chan struct{}, 2)
+
+	// stream -> target
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			n, addr, err := uc.ReadFrom(buf)
+			if err != nil {
+				break
+			}
+			ua, err := net.ResolveUDPAddr("udp", addr.String())
+			if err != nil {
+				continue
+			}
+			if _, err := udpConn.WriteToUDP(buf[:n], ua); err != nil {
+				break
+			}
+			up += int64(n)
+			_ = udpConn.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+		}
+		_ = udpConn.SetReadDeadline(time.Now()) // unblock the reader
+		done <- struct{}{}
+	}()
+
+	// target -> stream
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			n, addr, err := udpConn.ReadFromUDP(buf)
+			if err != nil {
+				break
+			}
+			if _, err := uc.WriteTo(buf[:n], addr); err != nil {
+				break
+			}
+			down += int64(n)
+			_ = udpConn.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+		}
+		_ = conn.Close() // unblock the stream reader
+		done <- struct{}{}
+	}()
+
+	<-done
+	<-done
+
+	if email != "" && h.s.report != nil {
+		h.s.report(email, up, down)
 	}
 }

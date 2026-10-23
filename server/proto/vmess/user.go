@@ -2,6 +2,7 @@ package vmess
 
 import (
 	"crypto/aes"
+	"crypto/hmac"
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/hex"
@@ -76,11 +77,17 @@ func matchAEADSingle(authID []byte, vu *vmessUser) bool {
 	return true
 }
 
-// matchUserAEAD returns the user whose AuthID matches, or nil.
+// matchUserAEAD returns the user whose AuthID matches, or nil. Users with
+// AlterID>0 are locked to legacy VMessMD5 (per heki's behavior: a retained
+// alterId>0 pins the account to MD5-only to avoid AEAD/MD5 mixing), so they are
+// excluded from AEAD matching here.
 func (h *Handler) matchUserAEAD(authID []byte) *vmessUser {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, vu := range h.users {
+		if vu.user.AlterID > 0 {
+			continue // MD5-only account
+		}
 		if matchAEADSingle(authID, vu) {
 			return vu
 		}
@@ -127,22 +134,30 @@ func nextLegacyAlterID(prev [16]byte) [16]byte {
 	return out
 }
 
-// legacyAuthMatches checks a 16-byte legacy auth value (HMAC-MD5 of timestamp)
-// against a user's AlterID id set within the time window.
+// legacyAuth computes the 16-byte legacy VMess authentication value for an id
+// and a unix timestamp: HMAC-MD5(key=id, message=timestamp as 8-byte BE),
+// matching pre-AEAD VMess clients.
+func legacyAuth(id [16]byte, unix int64) [16]byte {
+	var ts [8]byte
+	binary.BigEndian.PutUint64(ts[:], uint64(unix))
+	mac := hmac.New(md5.New, id[:])
+	mac.Write(ts[:])
+	var out [16]byte
+	copy(out[:], mac.Sum(nil))
+	return out
+}
+
+// legacyAuthMatches checks a 16-byte legacy auth value against a user's id set
+// (primary UUID + derived AlterID chain) within the clock-skew window.
 func legacyAuthMatches(vu *vmessUser, auth []byte) bool {
 	if vu.user.AlterID == 0 || len(auth) != 16 {
 		return false
 	}
+	window := int64(authWindow / time.Second)
 	now := time.Now().Unix()
-	for delta := int64(-int64(authWindow / time.Second)); delta <= int64(authWindow/time.Second); delta++ {
-		var ts [8]byte
-		binary.BigEndian.PutUint64(ts[:], uint64(now+delta))
+	for delta := -window; delta <= window; delta++ {
 		for _, id := range vu.legacyIDs {
-			sum := md5.New()
-			sum.Write(ts[:])
-			// v2ray legacy uses HMAC-MD5(id, time); approximated here.
-			sum.Write(id[:])
-			if string(sum.Sum(nil)) == string(auth) {
+			if a := legacyAuth(id, now+delta); hmac.Equal(a[:], auth) {
 				return true
 			}
 		}
