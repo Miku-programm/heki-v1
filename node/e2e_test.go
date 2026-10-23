@@ -2,7 +2,8 @@ package node
 
 import (
 	"bytes"
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -168,12 +169,14 @@ func atoi(s string) int {
 }
 
 // selfSignedCert makes an in-memory self-signed TLS certificate for the test.
+// ECDSA P-256 so it works for both standard TLS and QUIC/HTTP3 (hysteria2).
 func selfSignedCert(t *testing.T) tls.Certificate {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	pub := &priv.PublicKey
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "heki-node-test"},

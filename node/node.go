@@ -25,6 +25,7 @@ import (
 	"heki/server/proto/trojan"
 	"heki/server/proto/vless"
 	"heki/server/proto/vmess"
+	"heki/transport/hy2"
 )
 
 // Config is the node configuration.
@@ -87,6 +88,12 @@ type Node struct {
 	handler handlerAdapter
 	syncFn  func([]*panel.UserInfo) map[string]int // applies users, returns email->id
 	useTLS  bool
+
+	// hysteria2 (UDP/QUIC) path, backed by the real apernet library.
+	useUDP bool
+	hy     *hy2.Server
+	hyMap  func([]*panel.UserInfo) ([]*hy2.User, map[string]int)
+	pc     net.PacketConn
 
 	mu        sync.RWMutex
 	emailToID map[string]int
@@ -208,8 +215,20 @@ func (n *Node) buildHandler() error {
 			h.UpdateUsers(out)
 			return m
 		}
+	case "hysteria2":
+		n.useUDP = true
+		n.hyMap = func(us []*panel.UserInfo) ([]*hy2.User, map[string]int) {
+			out := make([]*hy2.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &hy2.User{ID: u.ID, Email: e, Auth: pwOf(u)})
+				m[e] = u.ID
+			}
+			return out, m
+		}
 	default:
-		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive)", n.cfg.Protocol)
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/hysteria2)", n.cfg.Protocol)
 	}
 	return nil
 }
@@ -238,6 +257,38 @@ func (n *Node) Start() error {
 	if _, err := n.client.GetNodeInfo(); err != nil {
 		log.Printf("[WARN] [Node %d] get node config: %v", n.cfg.NodeID, err)
 	}
+
+	// hysteria2: real apernet QUIC server on a UDP PacketConn.
+	if n.useUDP {
+		cert, err := n.loadCert()
+		if err != nil {
+			return err
+		}
+		pc, err := net.ListenPacket("udp", n.cfg.Listen)
+		if err != nil {
+			return fmt.Errorf("listen udp %s: %w", n.cfg.Listen, err)
+		}
+		n.pc = pc
+		hy, err := hy2.New(cert, pc, nil, n.acct.add, false)
+		if err != nil {
+			_ = pc.Close()
+			return fmt.Errorf("hysteria2 server: %w", err)
+		}
+		n.hy = hy
+		if err := n.syncUsers(); err != nil {
+			return fmt.Errorf("initial user sync: %w", err)
+		}
+		log.Printf("[INFO] [Node %d] hysteria2 listening on %s (QUIC/UDP)", n.cfg.NodeID, pc.LocalAddr())
+		go func() {
+			if err := n.hy.Serve(); err != nil {
+				log.Printf("[WARN] [Node %d] hysteria2 serve: %v", n.cfg.NodeID, err)
+			}
+		}()
+		go n.syncLoop()
+		go n.reportLoop()
+		return nil
+	}
+
 	if err := n.syncUsers(); err != nil {
 		return fmt.Errorf("initial user sync: %w", err)
 	}
@@ -270,6 +321,9 @@ func (n *Node) Start() error {
 }
 
 func (n *Node) Addr() net.Addr {
+	if n.useUDP && n.pc != nil {
+		return n.pc.LocalAddr()
+	}
 	if n.ln == nil {
 		return nil
 	}
@@ -306,12 +360,30 @@ func (n *Node) syncLoop() {
 	}
 }
 
+// loadCert returns the TLS certificate from the config (TLSConfig override or
+// cert/key files).
+func (n *Node) loadCert() (tls.Certificate, error) {
+	if n.cfg.TLSConfig != nil && len(n.cfg.TLSConfig.Certificates) > 0 {
+		return n.cfg.TLSConfig.Certificates[0], nil
+	}
+	return tls.LoadX509KeyPair(n.cfg.TLSCert, n.cfg.TLSKey)
+}
+
 func (n *Node) syncUsers() error {
 	users, err := n.client.GetUsers()
 	if err != nil {
 		return err
 	}
-	m := n.syncFn(users)
+	var m map[string]int
+	if n.useUDP {
+		hu, mm := n.hyMap(users)
+		if n.hy != nil {
+			n.hy.UpdateUsers(hu)
+		}
+		m = mm
+	} else {
+		m = n.syncFn(users)
+	}
 	n.mu.Lock()
 	n.emailToID = m
 	n.mu.Unlock()
@@ -359,6 +431,12 @@ func (n *Node) Stop() {
 		close(n.stop)
 		if n.ln != nil {
 			_ = n.ln.Close()
+		}
+		if n.hy != nil {
+			_ = n.hy.Close()
+		}
+		if n.pc != nil {
+			_ = n.pc.Close()
 		}
 	})
 }
