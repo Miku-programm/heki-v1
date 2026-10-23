@@ -45,20 +45,27 @@ type realityFileConfig struct {
 }
 
 type fileConfig struct {
-	Protocol          string             `json:"protocol"`
-	Method            string             `json:"method"`
-	PanelType         string             `json:"panel_type"`
-	PanelURL          string             `json:"panel_url"`
-	PanelKey          string             `json:"panel_key"`
-	NodeID            int                `json:"node_id"`
-	Listen            string             `json:"listen"`
-	TLSCert           string             `json:"tls_cert"`
-	TLSKey            string             `json:"tls_key"`
-	FallbackHost      string             `json:"fallback_host"`
-	FallbackPort      int                `json:"fallback_port"`
-	SyncIntervalSec   int                `json:"sync_interval_sec"`
-	ReportIntervalSec int                `json:"report_interval_sec"`
-	Reality           *realityFileConfig `json:"reality"`
+	Protocol          string               `json:"protocol"`
+	Method            string               `json:"method"`
+	PanelType         string               `json:"panel_type"`
+	PanelURL          string               `json:"panel_url"`
+	PanelKey          string               `json:"panel_key"`
+	NodeID            int                  `json:"node_id"`
+	Listen            string               `json:"listen"`
+	TLSCert           string               `json:"tls_cert"`
+	TLSKey            string               `json:"tls_key"`
+	FallbackHost      string               `json:"fallback_host"`
+	FallbackPort      int                  `json:"fallback_port"`
+	SyncIntervalSec   int                  `json:"sync_interval_sec"`
+	ReportIntervalSec int                  `json:"report_interval_sec"`
+	Reality           *realityFileConfig   `json:"reality"`
+	Hysteria2         *hysteria2FileConfig `json:"hysteria2"`
+}
+
+type hysteria2FileConfig struct {
+	ObfsPassword string `json:"obfs_password"` // Salamander PSK (obfs=salamander)
+	UpMbps       int    `json:"up_mbps"`
+	DownMbps     int    `json:"down_mbps"`
 }
 
 func main() {
@@ -110,6 +117,13 @@ func main() {
 			ServerNames: fc.Reality.ServerNames,
 			ShortIDs:    fc.Reality.ShortIDs,
 			Dest:        fc.Reality.Dest,
+		}
+	}
+	if fc.Hysteria2 != nil {
+		cfg.Hysteria2 = &node.Hysteria2Config{
+			ObfsPassword: fc.Hysteria2.ObfsPassword,
+			UpMbps:       fc.Hysteria2.UpMbps,
+			DownMbps:     fc.Hysteria2.DownMbps,
 		}
 	}
 

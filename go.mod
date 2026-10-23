@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/hysteria/core/v2 v2.12.2
+	github.com/apernet/hysteria/extras/v2 v2.12.2
 	github.com/enfein/mieru/v3 v3.38.2
 	github.com/refraction-networking/utls v1.8.2
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691

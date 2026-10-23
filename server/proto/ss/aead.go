@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // EVPBytesToKey derives the SS master key from a password (OpenSSL MD5 KDF).
@@ -42,12 +44,13 @@ type aeadSpec struct {
 }
 
 var aeadSpecs = map[string]aeadSpec{
-	"aes-128-gcm": {16, 16, aesGCM},
-	"aes-256-gcm": {32, 32, aesGCM},
-	// chacha20-ietf-poly1305 needs golang.org/x/crypto:
-	"chacha20-ietf-poly1305": {32, 32, func([]byte) (cipher.AEAD, error) {
-		return nil, fmt.Errorf("ss: chacha20-ietf-poly1305 needs golang.org/x/crypto/chacha20poly1305")
-	}},
+	"aes-128-gcm":            {16, 16, aesGCM},
+	"aes-256-gcm":            {32, 32, aesGCM},
+	"chacha20-ietf-poly1305": {32, 32, chacha20Poly1305},
+}
+
+func chacha20Poly1305(subkey []byte) (cipher.AEAD, error) {
+	return chacha20poly1305.New(subkey)
 }
 
 func aesGCM(subkey []byte) (cipher.AEAD, error) {

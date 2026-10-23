@@ -18,10 +18,10 @@
 // chunked frame format, the EIH identity-hash multi-user path (ssIdentityHash /
 // matchUserByIdentity), and the UDP NAT table.
 //
-// Reconstructed / scoped: identifier names; chacha20-poly1305 needs
-// golang.org/x/crypto and blake3 (SS-2022 key schedule) needs
-// lukechampine.com/blake3 — both are registered as injectable/unsupported so
-// the package builds on the standard library alone (AES-GCM paths are complete).
+// Reconstructed / scoped: identifier names. chacha20-ietf-poly1305 is wired via
+// golang.org/x/crypto/chacha20poly1305 (AES-GCM and ChaCha20 AEAD paths are both
+// complete and e2e-tested). blake3 (SS-2022 key schedule) needs
+// lukechampine.com/blake3 and is registered as an injectable deriver.
 //
 // Built and vet-checked with go1.26.3. Still a reconstruction, not the original.
 package ss

@@ -55,6 +55,16 @@ type Config struct {
 	TLSConfig *tls.Config // overrides cert/key files (tests)
 
 	Reality *RealityConfig // required for protocol "vless-reality"
+
+	Hysteria2 *Hysteria2Config // optional tuning for protocol "hysteria2"
+}
+
+// Hysteria2Config holds optional Hysteria2 tuning (Salamander obfuscation and
+// bandwidth caps), matching heki's obfs=salamander + obfs_password behavior.
+type Hysteria2Config struct {
+	ObfsPassword string // Salamander PSK; empty disables obfuscation
+	UpMbps       int    // server egress cap, 0 = unlimited
+	DownMbps     int    // server ingress cap, 0 = unlimited
 }
 
 // RealityConfig holds the node-level REALITY parameters (operator-provided,
@@ -280,7 +290,11 @@ func (n *Node) buildHandler() error {
 	case "hysteria2":
 		n.useUDP = true
 		n.udpNew = func(cert tls.Certificate, pc net.PacketConn) (udpService, error) {
-			return hy2.New(cert, pc, nil, report, false)
+			var opt hy2.Options
+			if h := n.cfg.Hysteria2; h != nil {
+				opt = hy2.Options{ObfsPassword: h.ObfsPassword, UpMbps: h.UpMbps, DownMbps: h.DownMbps}
+			}
+			return hy2.New(cert, pc, nil, report, opt)
 		}
 		n.udpSync = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*hy2.User, 0, len(us))

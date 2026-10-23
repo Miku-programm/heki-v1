@@ -11,7 +11,16 @@ import (
 	"sync"
 
 	hyserver "github.com/apernet/hysteria/core/v2/server"
+	"github.com/apernet/hysteria/extras/v2/obfs"
 )
+
+// Options configures optional Hysteria2 server features.
+type Options struct {
+	DisableUDP   bool
+	ObfsPassword string // Salamander obfuscation PSK; empty disables obfs
+	UpMbps       int    // server max egress (to client), 0 = unlimited
+	DownMbps     int    // server max ingress (from client), 0 = unlimited
+}
 
 // User is a Hysteria2 account (auth string = hysteria_password).
 type User struct {
@@ -28,16 +37,33 @@ type Server struct {
 	srv    hyserver.Server
 }
 
-// New builds a real Hysteria2 server bound to conn (a UDP PacketConn).
-func New(cert tls.Certificate, conn net.PacketConn, users []*User, report func(string, int64, int64), disableUDP bool) (*Server, error) {
+// New builds a real Hysteria2 server bound to conn (a UDP PacketConn). When
+// opt.ObfsPassword is set, conn is wrapped with Salamander obfuscation (the
+// client must use the same PSK).
+func New(cert tls.Certificate, conn net.PacketConn, users []*User, report func(string, int64, int64), opt Options) (*Server, error) {
 	s := &Server{report: report}
 	s.setUsers(users)
+
+	if opt.ObfsPassword != "" {
+		ob, err := obfs.WrapPacketConnSalamander(conn, []byte(opt.ObfsPassword))
+		if err != nil {
+			return nil, err
+		}
+		conn = ob
+	}
+
 	cfg := &hyserver.Config{
 		TLSConfig:     hyserver.TLSConfig{Certificates: []tls.Certificate{cert}},
 		Conn:          conn,
 		Authenticator: &authAdapter{s},
 		TrafficLogger: &trafficAdapter{s},
-		DisableUDP:    disableUDP,
+		DisableUDP:    opt.DisableUDP,
+	}
+	if opt.UpMbps > 0 {
+		cfg.BandwidthConfig.MaxTx = uint64(opt.UpMbps) * 125000 // mbps -> bytes/s
+	}
+	if opt.DownMbps > 0 {
+		cfg.BandwidthConfig.MaxRx = uint64(opt.DownMbps) * 125000
 	}
 	srv, err := hyserver.NewServer(cfg)
 	if err != nil {
@@ -89,6 +115,6 @@ func (t *trafficAdapter) LogTraffic(id string, tx, rx uint64) bool {
 	return true // keep the connection (no quota enforced here)
 }
 
-func (t *trafficAdapter) LogOnlineState(id string, online bool)                       {}
+func (t *trafficAdapter) LogOnlineState(id string, online bool)                        {}
 func (t *trafficAdapter) TraceStream(s hyserver.HyStream, stats *hyserver.StreamStats) {}
 func (t *trafficAdapter) UntraceStream(s hyserver.HyStream)                            {}

@@ -45,7 +45,7 @@ go build -o heki-node ./cmd/node
 }
 ```
 - `protocol`:`trojan`/`vmess`/`vless`/`vless-reality`/`ss`/`naive`/`anytls`/`hysteria2`/`tuic`/`mieru`。
-- `method`:仅 `ss` 用(aes-128-gcm / aes-256-gcm)。
+- `method`:仅 `ss` 用(`aes-128-gcm` / `aes-256-gcm` / `chacha20-ietf-poly1305`)。
 - `ss`/`mieru`/`vless-reality` 不需要 TLS 证书(各自自带加密/握手);`hysteria2`/`tuic` 用证书但走 QUIC/UDP;其余走 TLS,填 `tls_cert`/`tls_key`。
 - `panel_*`/`node_id`:与 XrayR/V2bX 的 ApiHost/ApiKey/NodeID 同义。
 - `panel_type`:`heki-v1`(heki 自有协议,推荐)/ `sspanel` / `xboard`(含 v2board/xiaov2board)/ `ppanel` / `metron`。
@@ -95,6 +95,18 @@ go build -o heki-node ./cmd/node
 }
 ```
 用 xray/sing-box 的 REALITY 客户端对接(public_key / server_name / short_id 与上面一致)。
+
+### Hysteria2 混淆与带宽(`protocol: hysteria2`)
+按文档,`obfs=salamander` + `obfs_password` 才启用 Salamander 混淆(真库 `apernet/hysteria/extras` 实现);客户端需用相同 PSK。可选带宽上限 `up_mbps/down_mbps`:
+```json
+{
+  "protocol": "hysteria2",
+  "panel_type": "sspanel", "panel_url": "...", "panel_key": "...", "node_id": 1,
+  "listen": ":443", "tls_cert": "...", "tls_key": "...",
+  "hysteria2": { "obfs_password": "你的混淆密码", "up_mbps": 100, "down_mbps": 100 }
+}
+```
+> 已验证:`go test ./node -run Hysteria2Obfs`(两端真 Salamander 混淆跑通 QUIC 往返)。SS `chacha20-ietf-poly1305` 也补齐:`go test ./node -run SSChaCha20`。
 
 ## 运行
 ```bash
