@@ -11,10 +11,11 @@
 | **hysteria2** | QUIC/UDP | ✅ `go test ./node -run Hysteria2`(接 apernet 真库) |
 | **tuic** | QUIC/UDP | ✅ `go test ./node -run TUIC`(接 sing-quic 真库,TCP 中继) |
 | **anytls** | TCP+TLS(会话复用+padding) | ✅ `go test ./node -run AnyTLS`(接 sing-anytls 真库) |
+| **mieru** | 私有混淆传输(TCP) | ✅ `go test ./node -run Mieru`(接 enfein/mieru 真库) |
 | **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
 | **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
 
-> `hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)已接上游真库跑通端到端。`mieru / vless-REALITY` 仍需各自上游库(enfein/mieru、xtls/reality),handler 已把传输抽象成接口。
+> `hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)已接上游真库跑通端到端。`vless-REALITY` 需 xtls/reality,handler 已把传输抽象成接口。
 
 ## 编译
 ```bash

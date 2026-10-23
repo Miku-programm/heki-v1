@@ -5,8 +5,10 @@ go 1.26
 require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/hysteria/core/v2 v2.12.2
+	github.com/enfein/mieru/v3 v3.38.2
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-quic v0.7.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -14,6 +16,7 @@ require (
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
+	github.com/google/btree v1.1.3 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/metacubex/utls v1.8.7 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

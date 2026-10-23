@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"heki/server/proto/vmess"
 	"heki/transport/anytlsx"
 	"heki/transport/hy2"
+	"heki/transport/mierux"
 	"heki/transport/tuicx"
 )
 
@@ -100,11 +102,12 @@ type Node struct {
 	// UDP/QUIC path, backed by real upstream libraries (hysteria2 -> apernet,
 	// tuic -> sing-quic). udpNew builds the server on the bound PacketConn;
 	// udpSync applies users to n.udpSrv and returns the email->id map.
-	useUDP  bool
-	udpSrv  udpService
-	udpNew  func(cert tls.Certificate, pc net.PacketConn) (udpService, error)
-	udpSync func(us []*panel.UserInfo) map[string]int
-	pc      net.PacketConn
+	useUDP     bool
+	selfListen bool // server binds its own socket (mieru); no PacketConn/TLS from node
+	udpSrv     udpService
+	udpNew     func(cert tls.Certificate, pc net.PacketConn) (udpService, error)
+	udpSync    func(us []*panel.UserInfo) map[string]int
+	pc         net.PacketConn
 
 	mu        sync.RWMutex
 	emailToID map[string]int
@@ -283,8 +286,35 @@ func (n *Node) buildHandler() error {
 			}
 			return m
 		}
+	case "mieru":
+		n.useUDP = true
+		n.selfListen = true
+		host, portStr, err := net.SplitHostPort(n.cfg.Listen)
+		if err != nil {
+			return fmt.Errorf("mieru listen addr %q: %w", n.cfg.Listen, err)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("mieru listen port %q: %w", portStr, err)
+		}
+		n.udpNew = func(_ tls.Certificate, _ net.PacketConn) (udpService, error) {
+			return mierux.New(host, port, report), nil
+		}
+		n.udpSync = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*mierux.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				out = append(out, &mierux.User{ID: u.ID, Email: e, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			if s, ok := n.udpSrv.(*mierux.Server); ok {
+				s.UpdateUsers(out)
+			}
+			return m
+		}
 	default:
-		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/anytls/hysteria2/tuic)", n.cfg.Protocol)
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/anytls/hysteria2/tuic/mieru)", n.cfg.Protocol)
 	}
 	return nil
 }
@@ -314,27 +344,41 @@ func (n *Node) Start() error {
 		log.Printf("[WARN] [Node %d] get node config: %v", n.cfg.NodeID, err)
 	}
 
-	// QUIC path (hysteria2 / tuic): real upstream server on a UDP PacketConn.
+	// Non-TCP-listener path: real upstream server either on a UDP PacketConn
+	// supplied by the node (hysteria2/tuic QUIC) or binding its own socket
+	// (mieru, selfListen).
 	if n.useUDP {
-		cert, err := n.loadCert()
-		if err != nil {
-			return err
+		var cert tls.Certificate
+		var pc net.PacketConn
+		if !n.selfListen {
+			c, err := n.loadCert()
+			if err != nil {
+				return err
+			}
+			cert = c
+			p, err := net.ListenPacket("udp", n.cfg.Listen)
+			if err != nil {
+				return fmt.Errorf("listen udp %s: %w", n.cfg.Listen, err)
+			}
+			pc = p
+			n.pc = pc
 		}
-		pc, err := net.ListenPacket("udp", n.cfg.Listen)
-		if err != nil {
-			return fmt.Errorf("listen udp %s: %w", n.cfg.Listen, err)
-		}
-		n.pc = pc
 		srv, err := n.udpNew(cert, pc)
 		if err != nil {
-			_ = pc.Close()
+			if pc != nil {
+				_ = pc.Close()
+			}
 			return fmt.Errorf("%s server: %w", n.cfg.Protocol, err)
 		}
 		n.udpSrv = srv
 		if err := n.syncUsers(); err != nil {
 			return fmt.Errorf("initial user sync: %w", err)
 		}
-		log.Printf("[INFO] [Node %d] %s listening on %s (QUIC/UDP)", n.cfg.NodeID, n.cfg.Protocol, pc.LocalAddr())
+		addr := n.cfg.Listen
+		if pc != nil {
+			addr = pc.LocalAddr().String()
+		}
+		log.Printf("[INFO] [Node %d] %s listening on %s", n.cfg.NodeID, n.cfg.Protocol, addr)
 		go func() {
 			if err := srv.Serve(); err != nil {
 				log.Printf("[WARN] [Node %d] %s serve: %v", n.cfg.NodeID, n.cfg.Protocol, err)
