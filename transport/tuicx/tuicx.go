@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	qtls "github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing-quic/tuic"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/logger"
@@ -44,6 +45,12 @@ type Options struct {
 	Heartbeat         time.Duration     // default 10s
 	UDPTimeout        time.Duration     // UDP association idle timeout
 	Dialer            *dataplane.Dialer // optional egress routing/DNS/audit
+
+	// QUIC flow-control receive windows (bytes). heki's TUIC uses generous
+	// windows for throughput on high-BDP links; default to 6 MiB stream /
+	// 15 MiB connection when unset.
+	StreamReceiveWindow     uint64
+	ConnectionReceiveWindow uint64
 }
 
 // Server wraps the sing-quic TUIC service.
@@ -76,6 +83,14 @@ func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int
 	if authTimeout == 0 {
 		authTimeout = 3 * time.Second
 	}
+	streamWin := opt.StreamReceiveWindow
+	if streamWin == 0 {
+		streamWin = 6 * 1024 * 1024 // 6 MiB
+	}
+	connWin := opt.ConnectionReceiveWindow
+	if connWin == 0 {
+		connWin = 15 * 1024 * 1024 // 15 MiB
+	}
 	svc, err := tuic.NewService[int](tuic.ServiceOptions{
 		Context:           context.Background(),
 		Logger:            logger.NOP(),
@@ -86,6 +101,10 @@ func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int
 		AuthTimeout:       authTimeout,
 		Heartbeat:         opt.Heartbeat,
 		UDPTimeout:        opt.UDPTimeout,
+		QUICOptions: qtls.QUICOptions{
+			StreamReceiveWindow:     streamWin,
+			ConnectionReceiveWindow: connWin,
+		},
 	})
 	if err != nil {
 		return nil, err

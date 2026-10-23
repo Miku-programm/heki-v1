@@ -39,7 +39,9 @@
 
    **mieru:IDA 深挖后未见确认的行为补丁。** 顺着文档提到的"空 TCP 回收 / ~6 分 30 秒会话复用宽限",定位到 `ScheduleController.Idle`/`TryDisableIdle`(对比全局 `scheduleIdleTime`)和 replay 缓存窗口。反编译 `protocol.init` 确认 heki 的 replay 缓存 = `NewCache(4MB, 360s)`,而原版 v3.38.0 就是 `KeyRefreshInterval(120s)*3 = 360s`——**完全一致**。文档里的空闲宽限是 mieru 原版的本地资源策略(非线协议),heki 直接继承。`scheduleIdleTime` 的赋值在 Go 拆分出的多段 init 里、经间接存储,难以干净定位,但它是本地资源常量,不影响线协议/代理行为。结论:**未发现可确认的行为补丁,原版 v3.38.0 忠实。**
 
-   **sing-quic:无明显可复原信号。** 符号层被泛型/congestion(BBR 等)噪声主导,没有像 sing-anytls 那样的新增函数信号;body 级逐函数比对成本极高且多半核心未改,暂用**原版同版本库**(线协议一致)。
+   **sing-quic:IDA 挖到唯一的库补丁,但影响很小。** 去掉泛型/congestion 噪声后,`tuic` 子包里唯一 heki 新增、原版没有的函数是 **`tuic.releaseCongestion`**(原版全库无此函数)。反编译它:`newCubicSender(DefaultClock{timeFunc}, reno=false, packetSize, 32*packetSize, 20000*packetSize)` 再 `SetCongestionControl`,由 `serverSession.closeWithError` 调用——即**在 TUIC 会话拆除前后重装一个 cubic 拥塞控制器**。但那两个窗口参数 `32 / 20000` 和**原版默认常量 `initialCongestionWindow=32` / `MaxCongestionWindowPackets=20000` 完全一致**——所以不是窗口调参,只是"重置拥塞控制器"这个动作;收益存疑(连接级 close 时重置近乎无效),且调用点语义从反编译看不够确切,**故不重建**(低置信、边际收益、还可能有害)。`serverConn.Peek/SetDeadline/handle*Frame` 等"heki-only"是 `serverConn` 内嵌 `*quic.Stream` 的**方法提升**产物,非补丁。
+
+   文档提到的 TUIC "**2/6/3/15 MB 流/连接窗口**"不是 sing-quic 补丁,而是 heki 在 TUIC 胶水层设的 quic.Config/QUICOptions 值。**本工程已在 `transport/tuicx` 对齐该意图**:默认设宽松接收窗(6 MiB 流 / 15 MiB 连接,可配 `Options.StreamReceiveWindow`/`ConnectionReceiveWindow`),`go test ./node -run TUIC` 通过。
 
    **小结**:heki 四个私有 `./patches/` 里,只有 **sing-anytls** 有清晰、可复原、可验证的**行为补丁**(已重建应用);sing-vmess / mieru 经 IDA 核查**未见可确认的行为补丁**(核心函数/关键常量与原版一致);sing-quic 无可下手信号。私有 fork 的补丁未必都是行为改动——有的是编译裁剪、构建/兼容微调或本地资源常量。
 
