@@ -12,13 +12,13 @@
 | **tuic** | QUIC/UDP | ✅ `go test ./node -run TUIC`(接 sing-quic 真库,TCP 中继) |
 | **anytls** | TCP+TLS(会话复用+padding) | ✅ `go test ./node -run AnyTLS`(接 sing-anytls 真库) |
 | **mieru** | 私有混淆传输(TCP) | ✅ `go test ./node -run Mieru`(接 enfein/mieru 真库) |
-| **vless-reality** | REALITY(偷 TLS 握手) | ✅ `go test ./transport/realityx`(接 sagernet/reality 真库,验证握手中继到 Dest) |
+| **vless-reality** | REALITY(偷 TLS 握手) | ✅ `go test ./node -run VLESSReality`(真 uTLS 授权客户端,完整 vless-over-REALITY 往返) |
 | **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
 | **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
 
 > 五个特殊传输全部接上游真库:`hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)、`vless-reality`(sagernet/reality)。
 >
-> **REALITY 说明**:服务端用的是 sing-box 同款 `sagernet/reality` 真库,节点会真实完成 REALITY 握手并在未授权时把连接透明中继到 `dest`(偷自己证书)。授权客户端的 VLESS 往返需要 uTLS 版 REALITY 客户端(xray/sing-box),用标准客户端对接即可——这是 REALITY 的部署常态,不是桩实现。
+> **REALITY 说明**:服务端用的是 sing-box 同款 `sagernet/reality` 真库。授权往返已用**自带的真 uTLS REALITY 客户端**(`transport/realityx/realityc`,refraction-networking/utls)跑通完整 e2e:session_id 鉴权(x25519 共享密钥 + AES-GCM 封装 version/time/shortID)→ 服务端 HMAC-SHA512 证书验证 → VLESS 往返 → 回报面板。未授权连接仍会透明中继到 `dest`(偷自己证书)。生产用 xray/sing-box 的 REALITY 客户端对接即可。
 
 ## 编译
 ```bash

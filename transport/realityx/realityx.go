@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"os"
 
 	reality "github.com/sagernet/reality"
 	"golang.org/x/crypto/curve25519"
@@ -74,12 +75,18 @@ func buildConfig(opt Options) (*reality.Config, error) {
 		shortIDs[[8]byte{}] = true // allow the empty short id by default
 	}
 	return &reality.Config{
+		Show:        os.Getenv("REALITY_DEBUG") != "",
 		DialContext: (&net.Dialer{}).DialContext,
 		Type:        "tcp",
 		Dest:        opt.Dest,
 		ServerNames: names,
 		PrivateKey:  opt.PrivateKey,
 		ShortIds:    shortIDs,
+		// Don't emit a NewSessionTicket: REALITY pads each of its handshake
+		// messages to the size of Dest's corresponding record, and the server's
+		// own NST can exceed a small Dest's, overflowing the pad. Proxies don't
+		// resume TLS sessions anyway.
+		SessionTicketsDisabled: true,
 	}, nil
 }
 

@@ -6,6 +6,7 @@ require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/hysteria/core/v2 v2.12.2
 	github.com/enfein/mieru/v3 v3.38.2
+	github.com/refraction-networking/utls v1.8.2
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-quic v0.7.0
@@ -23,7 +24,6 @@ require (
 	github.com/metacubex/utls v1.8.7 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
