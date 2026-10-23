@@ -26,12 +26,12 @@ import (
 	"heki/server/proto/ss"
 	"heki/server/proto/trojan"
 	"heki/server/proto/vless"
-	"heki/server/proto/vmess"
 	"heki/transport/anytlsx"
 	"heki/transport/hy2"
 	"heki/transport/mierux"
 	"heki/transport/realityx"
 	"heki/transport/tuicx"
+	"heki/transport/vmessx"
 )
 
 // Config is the node configuration.
@@ -269,19 +269,19 @@ func (n *Node) buildHandler() error {
 			return m
 		}
 	case "vmess":
-		h := vmess.NewHandler(nil, "", 0)
-		h.SetServerCallbacks(vmess.ServerCallbacks{ReportTraffic: report})
-		h.SetDialer(n.dialer)
+		// heki links sing-vmess for VMess; use it (via vmessx) instead of the
+		// standalone stdlib reconstruction, so the node matches heki's library.
+		h := vmessx.New(report, n.dialer)
 		n.handler, n.useTLS = h, true
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
-			out := make([]*vmess.User, 0, len(us))
+			out := make([]*vmessx.User, 0, len(us))
 			m := map[string]int{}
 			for _, u := range us {
 				e := emailOf(u)
-				out = append(out, &vmess.User{Email: e, UUID: vmess.ParseUUID(u.UUID)})
+				out = append(out, &vmessx.User{ID: u.ID, Email: e, UUID: u.UUID, AlterID: u.AlterID})
 				m[e] = u.ID
 			}
-			h.UpdateUsers(out)
+			_ = h.UpdateUsers(out)
 			return m
 		}
 	case "vless":

@@ -1,5 +1,8 @@
-// Package realityx is a REAL REALITY server layer: it drives the upstream
-// github.com/sagernet/reality library (the same code sing-box uses) to
+// Package realityx is a REAL REALITY server layer. heki's kernel links
+// github.com/xtls/reality (+ xtls/xray-core); this uses github.com/sagernet/
+// reality — a wire-compatible maintained fork of xtls/reality — because the
+// bundled uTLS authorized test client (realityc) interoperates with it in
+// process. See HEKI-FIDELITY.md. It drives the upstream reality library to
 // terminate REALITY handshakes, then hands the authenticated connection to a
 // normal handler (heki's VLESS handler). REALITY "borrows" a real TLS site's
 // certificate: the server relays the handshake to Dest and, for an authorized
