@@ -48,6 +48,30 @@ go build -o heki-node ./cmd/node
 - `method`:仅 `ss` 用(aes-128-gcm / aes-256-gcm)。
 - `ss`/`mieru`/`vless-reality` 不需要 TLS 证书(各自自带加密/握手);`hysteria2`/`tuic` 用证书但走 QUIC/UDP;其余走 TLS,填 `tls_cert`/`tls_key`。
 - `panel_*`/`node_id`:与 XrayR/V2bX 的 ApiHost/ApiKey/NodeID 同义。
+- `panel_type`:`heki-v1`(heki 自有协议,推荐)/ `sspanel` / `xboard`(含 v2board/xiaov2board)/ `ppanel` / `metron`。
+
+### 对接 heki 自有面板(`panel_type: heki-v1`)
+`heki-v1` 是 heki 对外公开的版本化控制面 WebAPI([官方文档](https://hekicore.github.io/heki-docs/#/panel/heki-v1-webapi))。本重建已按规范实现:
+
+- 五个接口(`panel_url` 为基址,自动拼 `/api/v1/nodes/{node_id}`):
+  - `GET  /api/v1/nodes/{id}`、`GET /api/v1/nodes/{id}/users`
+  - `POST /api/v1/nodes/{id}/traffic`、`/alive-ips`、`/status`
+- Bearer 鉴权(`Authorization: Bearer <panel_key>`),请求头带 `User-Agent: heki`、`X-Heki-Node-Id`、`Accept: application/json, application/problem+json`;
+- 响应用 `{"data": …}` 外层包装(也兼容裸对象/数组),GET 走 `ETag`/`If-None-Match`(304 复用缓存),错误用 RFC 7807(`application/problem+json`);
+- 上报体:`traffic` = `{"records":[{"user_id","u","d"}]}`,`alive-ips` = `{"records":[{"user_id","ips":[…]}]}`;
+- Node 对象的 `protocol` 会解析并归一(别名 `v2ray/shadowsocks/shadowsocksr/hysteria` 自动映射到规范名),连同 `listen/limits/scheduler/security.reality` 一起暴露在 `NodeInfo` 上;用户 `banned/disabled/enabled=false` 会自动过滤。当前节点仍以 `config.json` 的 `protocol` 启动(请与面板下发保持一致)。
+
+```json
+{
+  "protocol":   "vless",
+  "panel_type": "heki-v1",
+  "panel_url":  "https://api.example.com/heki",
+  "panel_key":  "your-api-key",
+  "node_id":    1,
+  "listen":     ":443"
+}
+```
+> 已验证:`go test ./panel -run HekiV1`(线协议一致性)+ `go test ./node -run HekiV1`(节点对接 heki-v1 后端跑通 trojan 全链路并按 `{"records":[…]}` 回报)。
 
 ### REALITY(`protocol: vless-reality`)
 先生成密钥对:

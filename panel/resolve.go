@@ -27,7 +27,7 @@ func NormalizePanelType(s string) PanelType {
 		return PanelPPanel
 	case "metron":
 		return PanelMetron
-	case "hekiv1", "heki":
+	case "hekiv1", "heki-v1", "heki":
 		return PanelHekiV1
 	default:
 		return PanelXBoard // the binary's default probe target

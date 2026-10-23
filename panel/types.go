@@ -32,6 +32,25 @@ type NodeInfo struct {
 	Routes     []string
 	ETag       string // for conditional requests
 	Raw        []byte // original body (debug)
+
+	// heki-v1 node fields (optional; populated by the heki-v1 client).
+	Protocol        string        // canonical protocol from the API (authoritative)
+	ListenIP        string        // listen.ip
+	ListenPort      int           // listen.port
+	TrafficRate     float64       // limits.traffic_rate (default 1.0)
+	PullIntervalSec int           // scheduler.pull_interval_seconds
+	PushIntervalSec int           // scheduler.push_interval_seconds
+	SecurityMode    string        // security.mode: none / tls / reality
+	ServerName      string        // security.server_name (SNI hint)
+	Reality         *RealityInfo  // security.reality (when mode=reality)
+}
+
+// RealityInfo is the REALITY security block from a heki-v1 node object.
+type RealityInfo struct {
+	PrivateKey  string
+	ServerNames []string
+	ShortIDs    []string
+	Dest        string
 }
 
 // UserInfo is one account pulled from the panel.
@@ -44,6 +63,17 @@ type UserInfo struct {
 	SpeedLimit  int    // mbps
 	DeviceLimit int
 	AlterID     int
+
+	// heki-v1 / SSR extended fields (optional).
+	Protocol      string // ssr protocol
+	ProtocolParam string // ssr protocol_param
+	Obfs          string // ssr obfs
+	ObfsParam     string // ssr obfs_param
+	Port          int    // ssr / multi-user carrier port
+	UploadBytes   int64
+	DownloadBytes int64
+	TransferEnable int64 // total quota
+	ExpiredAt     int64  // unix
 }
 
 // NodeStatus is the node heartbeat/status payload pushed to the panel.

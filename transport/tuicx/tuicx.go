@@ -60,7 +60,7 @@ func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int
 		Logger:            logger.NOP(),
 		TLSConfig:         &singTLS{std: std},
 		Handler:           &handler{s: s},
-		CongestionControl: "bbr",
+		CongestionControl: "cubic", // heki's default (per docs); client picks its own
 		AuthTimeout:       3 * time.Second,
 	})
 	if err != nil {
