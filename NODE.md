@@ -8,10 +8,12 @@
 | **trojan** | TCP+TLS | ✅ `go test ./node -run Trojan` |
 | **vless**(非 REALITY) | TCP+TLS | ✅ `go test ./node -run VLESS` |
 | **ss**(aes-128/256-gcm) | TCP(自带加密) | ✅ `go test ./node -run SS` |
+| **hysteria2** | QUIC/UDP | ✅ `go test ./node -run Hysteria2`(接 apernet 真库) |
+| **tuic** | QUIC/UDP | ✅ `go test ./node -run TUIC`(接 sing-quic 真库,TCP 中继) |
 | **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
 | **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
 
-> `hysteria2 / tuic / mieru / vless-REALITY / anytls` 依赖 QUIC / REALITY / 私有会话传输,**需接入上游库**(xray-core/sing/apernet/sing-quic/sing-anytls),未在 node 里实现——这些 handler 已把传输抽象成接口,接上真库即可。
+> `hysteria2`(apernet)、`tuic`(sing-quic)已接上游真库跑通端到端。`mieru / vless-REALITY / anytls` 仍需各自上游库(enfein/mieru、xtls/reality、sing-anytls),handler 已把传输抽象成接口。
 
 ## 编译
 ```bash

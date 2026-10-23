@@ -26,6 +26,7 @@ import (
 	"heki/server/proto/vless"
 	"heki/server/proto/vmess"
 	"heki/transport/hy2"
+	"heki/transport/tuicx"
 )
 
 // Config is the node configuration.
@@ -52,6 +53,12 @@ type Config struct {
 
 type handlerAdapter interface {
 	HandleConn(net.Conn) error
+}
+
+// udpService is a running QUIC-based protocol server (hysteria2, tuic).
+type udpService interface {
+	Serve() error
+	Close() error
 }
 
 type accounting struct {
@@ -89,11 +96,14 @@ type Node struct {
 	syncFn  func([]*panel.UserInfo) map[string]int // applies users, returns email->id
 	useTLS  bool
 
-	// hysteria2 (UDP/QUIC) path, backed by the real apernet library.
-	useUDP bool
-	hy     *hy2.Server
-	hyMap  func([]*panel.UserInfo) ([]*hy2.User, map[string]int)
-	pc     net.PacketConn
+	// UDP/QUIC path, backed by real upstream libraries (hysteria2 -> apernet,
+	// tuic -> sing-quic). udpNew builds the server on the bound PacketConn;
+	// udpSync applies users to n.udpSrv and returns the email->id map.
+	useUDP  bool
+	udpSrv  udpService
+	udpNew  func(cert tls.Certificate, pc net.PacketConn) (udpService, error)
+	udpSync func(us []*panel.UserInfo) map[string]int
+	pc      net.PacketConn
 
 	mu        sync.RWMutex
 	emailToID map[string]int
@@ -217,7 +227,10 @@ func (n *Node) buildHandler() error {
 		}
 	case "hysteria2":
 		n.useUDP = true
-		n.hyMap = func(us []*panel.UserInfo) ([]*hy2.User, map[string]int) {
+		n.udpNew = func(cert tls.Certificate, pc net.PacketConn) (udpService, error) {
+			return hy2.New(cert, pc, nil, report, false)
+		}
+		n.udpSync = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*hy2.User, 0, len(us))
 			m := map[string]int{}
 			for _, u := range us {
@@ -225,10 +238,35 @@ func (n *Node) buildHandler() error {
 				out = append(out, &hy2.User{ID: u.ID, Email: e, Auth: pwOf(u)})
 				m[e] = u.ID
 			}
-			return out, m
+			if s, ok := n.udpSrv.(*hy2.Server); ok {
+				s.UpdateUsers(out)
+			}
+			return m
+		}
+	case "tuic":
+		n.useUDP = true
+		n.udpNew = func(cert tls.Certificate, pc net.PacketConn) (udpService, error) {
+			return tuicx.New(cert, pc, report)
+		}
+		n.udpSync = func(us []*panel.UserInfo) map[string]int {
+			out := make([]*tuicx.User, 0, len(us))
+			m := map[string]int{}
+			for _, u := range us {
+				e := emailOf(u)
+				id, err := vless.ParseUUID(u.UUID)
+				if err != nil {
+					continue
+				}
+				out = append(out, &tuicx.User{ID: u.ID, Email: e, UUID: id, Password: pwOf(u)})
+				m[e] = u.ID
+			}
+			if s, ok := n.udpSrv.(*tuicx.Server); ok {
+				s.UpdateUsers(out)
+			}
+			return m
 		}
 	default:
-		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/hysteria2)", n.cfg.Protocol)
+		return fmt.Errorf("node: unsupported/unwired protocol %q (runnable: trojan/vmess/vless/ss/naive/hysteria2/tuic)", n.cfg.Protocol)
 	}
 	return nil
 }
@@ -258,7 +296,7 @@ func (n *Node) Start() error {
 		log.Printf("[WARN] [Node %d] get node config: %v", n.cfg.NodeID, err)
 	}
 
-	// hysteria2: real apernet QUIC server on a UDP PacketConn.
+	// QUIC path (hysteria2 / tuic): real upstream server on a UDP PacketConn.
 	if n.useUDP {
 		cert, err := n.loadCert()
 		if err != nil {
@@ -269,19 +307,19 @@ func (n *Node) Start() error {
 			return fmt.Errorf("listen udp %s: %w", n.cfg.Listen, err)
 		}
 		n.pc = pc
-		hy, err := hy2.New(cert, pc, nil, n.acct.add, false)
+		srv, err := n.udpNew(cert, pc)
 		if err != nil {
 			_ = pc.Close()
-			return fmt.Errorf("hysteria2 server: %w", err)
+			return fmt.Errorf("%s server: %w", n.cfg.Protocol, err)
 		}
-		n.hy = hy
+		n.udpSrv = srv
 		if err := n.syncUsers(); err != nil {
 			return fmt.Errorf("initial user sync: %w", err)
 		}
-		log.Printf("[INFO] [Node %d] hysteria2 listening on %s (QUIC/UDP)", n.cfg.NodeID, pc.LocalAddr())
+		log.Printf("[INFO] [Node %d] %s listening on %s (QUIC/UDP)", n.cfg.NodeID, n.cfg.Protocol, pc.LocalAddr())
 		go func() {
-			if err := n.hy.Serve(); err != nil {
-				log.Printf("[WARN] [Node %d] hysteria2 serve: %v", n.cfg.NodeID, err)
+			if err := srv.Serve(); err != nil {
+				log.Printf("[WARN] [Node %d] %s serve: %v", n.cfg.NodeID, n.cfg.Protocol, err)
 			}
 		}()
 		go n.syncLoop()
@@ -376,11 +414,7 @@ func (n *Node) syncUsers() error {
 	}
 	var m map[string]int
 	if n.useUDP {
-		hu, mm := n.hyMap(users)
-		if n.hy != nil {
-			n.hy.UpdateUsers(hu)
-		}
-		m = mm
+		m = n.udpSync(users)
 	} else {
 		m = n.syncFn(users)
 	}
@@ -432,8 +466,8 @@ func (n *Node) Stop() {
 		if n.ln != nil {
 			_ = n.ln.Close()
 		}
-		if n.hy != nil {
-			_ = n.hy.Close()
+		if n.udpSrv != nil {
+			_ = n.udpSrv.Close()
 		}
 		if n.pc != nil {
 			_ = n.pc.Close()
