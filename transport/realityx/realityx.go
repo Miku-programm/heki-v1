@@ -1,6 +1,9 @@
-// Package realityx is a REAL REALITY server layer built on
-// github.com/xtls/reality — heki's exact library (heki links xtls/reality +
-// xtls/xray-core), pinned to heki's build-info version. On startup it runs
+// Package realityx is a REAL REALITY server layer built on heki's exact
+// libraries: it terminates the handshake through
+// github.com/xtls/xray-core/transport/internet/reality.Server — the same
+// integration wrapper heki links (heki's buildinfo links both xtls/reality and
+// xtls/xray-core) — which in turn drives github.com/xtls/reality. Both are
+// pinned to heki's build-info versions. On startup it runs
 // reality.DetectPostHandshakeRecordsLens (as xray does) so the authorized path
 // has Dest's learned record shape. The bundled uTLS authorized client
 // (realityc) interoperates with it in process. It drives the reality library to
@@ -18,7 +21,6 @@
 package realityx
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"os"
 
 	reality "github.com/xtls/reality"
+	xrayreality "github.com/xtls/xray-core/transport/internet/reality"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -127,7 +130,12 @@ func (l *Listener) loop() {
 			return
 		}
 		go func() {
-			rc, err := reality.Server(context.Background(), c, l.cfg)
+			// heki's exact integration path: xray-core's reality.Server is a thin
+			// wrapper that calls github.com/xtls/reality.Server(context.Background(),
+			// c, cfg) and returns its authenticated conn. Routing through it keeps
+			// us byte-for-byte on heki's REALITY glue rather than calling the
+			// underlying library directly.
+			rc, err := xrayreality.Server(c, l.cfg)
 			if err != nil {
 				return // unauthorized/invalid: already handled (relayed to Dest)
 			}

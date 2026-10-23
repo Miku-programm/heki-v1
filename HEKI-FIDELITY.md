@@ -27,7 +27,8 @@
 | mieru | `enfein/mieru/v3 v3.38.0`(`./patches/`) | `v3.38.0`(原版) | ✅ 同库同版 |
 | vmess | `sagernet/sing-vmess v0.2.8`(`./patches/`) | `v0.2.8`(原版,`transport/vmessx`) | ✅ 同库同版 |
 | 底层 sing | `sagernet/sing v0.9.0` | `v0.9.0` | ✅ 一致 |
-| vless-reality | `xtls/reality` + `xtls/xray-core` | `xtls/reality`(heki build-info 确切版本 `v0.0.0-20260322125925`) | ✅ 同库同版 |
+| vless-reality | `xtls/reality` + `xtls/xray-core v1.260327.0` | 经 `xtls/xray-core v1.260327.0` 的 `transport/internet/reality.Server` 驱动 `xtls/reality v0.0.0-20260322125925` | ✅ 同库同版+同集成层 |
+| utls(reality 依赖) | `refraction-networking/utls v1.8.3-0.20260301010127` + `metacubex/utls v1.8.7` | 同(接入 xray-core 后由 MVS 自动对齐) | ✅ 完全一致 |
 
 ## 两点说明(诚实)
 
@@ -45,11 +46,15 @@
 
    **小结**:heki 四个私有 `./patches/` 里,只有 **sing-anytls** 有清晰、可复原、可验证的**行为补丁**(已重建应用);sing-vmess / mieru 经 IDA 核查**未见可确认的行为补丁**(核心函数/关键常量与原版一致);sing-quic 无可下手信号。私有 fork 的补丁未必都是行为改动——有的是编译裁剪、构建/兼容微调或本地资源常量。
 
-2. **REALITY 已对齐 `xtls/reality`(heki 的确切库+版本)**:用 `xtls/reality@v0.0.0-20260322125925`(只需 Go 1.24)。自带的 uTLS 授权客户端(`transport/realityx/realityc`)**无需改动**即与它互通——授权往返 e2e 通过(`go test ./node -run VLESSReality`)。关键点:xtls/reality 授权路径会**模仿 Dest 的握手后记录长度**,这些长度由 `reality.DetectPostHandshakeRecordsLens`(xray 启动时也调)探测 Dest 得到;`realityx` 在建监听器时调用它,否则授权连接会一直等这个"学习结果"而卡住(首连有一次探测等待,约 5s)。
+2. **REALITY 已对齐到 heki 的确切集成层(xray-core 的 reality transport + xtls/reality)**:服务端握手**经 `github.com/xtls/xray-core v1.260327.0` 的 `transport/internet/reality.Server` 驱动**(该函数是个薄封装:内部调 `github.com/xtls/reality.Server(context.Background(), c, cfg)` 并返回其认证后的连接),而不是直接调底层库——这正是 heki 链接的同一条 REALITY 胶水路径(heki buildinfo 同时链接 `xtls/reality` 与 `xtls/xray-core v1.260327.0`,二者本工程均用其确切版本)。
+
+   **附带收益:utls 自动对齐。** 接入 xray-core 后,Go 的 MVS 把 `refraction-networking/utls` 从本工程先前的 `v1.8.2` 升到 heki buildinfo 的**确切版本 `v1.8.3-0.20260301010127-aa6edf4b11af`**,并带入 `metacubex/utls v1.8.7`(indirect)——与 heki buildinfo **逐版本一致**。
+
+   自带的 uTLS 授权客户端(`transport/realityx/realityc`)**无需改动**即与之互通——授权往返 e2e 通过(`go test ./node -run VLESSReality`)。关键点:xtls/reality 授权路径会**模仿 Dest 的握手后记录长度**,这些长度由 `reality.DetectPostHandshakeRecordsLens`(xray 启动时也调)探测 Dest 得到;`realityx` 在建监听器时调用它,否则授权连接会一直等这个"学习结果"而卡住(首连有一次探测等待,约 5s)。
 
 ## 本工程的协议栈构成(和 heki 同路子)
 - trojan / vless / ss / naive:标准库自写服务端(逆向重建,heki 这部分也是自有实现)。
 - vmess:`sagernet/sing-vmess`(= heki 的库)。
 - hysteria2 / tuic / anytls / mieru:各自上游库(= heki 的库,原版未打补丁)。
-- vless-reality:`xtls/reality`(= heki 的库,确切版本)+ 自带 uTLS 授权客户端(互通已验证)。
+- vless-reality:经 `xtls/xray-core` 的 `transport/internet/reality.Server` 驱动 `xtls/reality`(= heki 的同一集成层+确切版本)+ 自带 uTLS 授权客户端(互通已验证)。
 - 数据面(路由/DNS/审计/PROXY protocol/链式出站):标准库自写。
