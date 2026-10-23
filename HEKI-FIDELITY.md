@@ -31,7 +31,11 @@
 
 ## 两点说明(诚实)
 
-1. **私有补丁 `./patches/*` 无法逐行复刻**:heki 对 sing-quic / sing-anytls / mieru / sing-vmess 都打了本地补丁(buildinfo 里是 `=> ./patches/... (devel)`,无 module hash,源码不公开)。补丁**改动面**能从二进制符号 diff 出来(例:sing-anytls 的补丁是把 Stream 收包改成 pipe + recv-pump,并重构了帧/握手),但**函数体逐行复刻**需从剥离符号的 Go 二进制反编译,输出粗糙、且无源码可验证,不保证一致——本工程用**原版未打补丁的同版本库**,线协议一致、内部实现非 heki 那份补丁。
+1. **私有补丁 `./patches/*`(无 module hash、源码不公开)**:heki 对 sing-quic / sing-anytls / mieru / sing-vmess 都打了本地补丁(buildinfo 里是 `=> ./patches/... (devel)`)。
+
+   **已恢复并落地:`patches/sing-anytls`。** 用 IDA/Hex-Rays 反编译了二进制里的 `(*Stream).Read` / `runRecvPump` / `enqueueRecvItem` / `newStream`,确认 heki 的补丁是:在 `Session.recvLoop` 和 Stream 的 pipe 之间插入一条**异步接收队列 + 每流 `runRecvPump` goroutine**(慢读的流不再阻塞整个会话的 recvLoop——消除队头阻塞),并把 die-error 改成**原子存取**(消除竞态)。本工程按此在 `patches/sing-anytls/session/stream.go`+`session.go` 重建了该补丁,并像 heki 一样用 `replace github.com/anytls/sing-anytls => ./patches/sing-anytls` 挂上。验证:`go build`/`-race` 通过、**该库自带的 `session` 测试通过**(含 64KiB 大包/分帧测试)、节点 anytls e2e(含 UoT/链式)通过。这是**对该补丁行为的重建**,非 heki 逐字节源码。
+
+   **其余 3 个补丁(sing-quic / mieru / sing-vmess)**:改动面能从符号 diff 看到,但函数体多(mieru 769、sing-vmess 286、sing-quic 含 BBR 等),逐行从剥离二进制反编译重建成本高且无源码可验证,暂用**原版同版本库**(线协议一致)。
 
 2. **REALITY 已对齐 `xtls/reality`(heki 的确切库+版本)**:用 `xtls/reality@v0.0.0-20260322125925`(只需 Go 1.24)。自带的 uTLS 授权客户端(`transport/realityx/realityc`)**无需改动**即与它互通——授权往返 e2e 通过(`go test ./node -run VLESSReality`)。关键点:xtls/reality 授权路径会**模仿 Dest 的握手后记录长度**,这些长度由 `reality.DetectPostHandshakeRecordsLens`(xray 启动时也调)探测 Dest 得到;`realityx` 在建监听器时调用它,否则授权连接会一直等这个"学习结果"而卡住(首连有一次探测等待,约 5s)。
 
