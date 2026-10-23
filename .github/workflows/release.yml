@@ -1,0 +1,59 @@
+name: Release
+
+# Builds the node + selfcheck binaries for each target on a v* tag and attaches
+# the tarballs to that tag's GitHub release (created if it does not exist yet,
+# so it composes with a release made by hand via `gh release create`).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          suffix=""
+          if [ "$GOOS" = "windows" ]; then suffix=".exe"; fi
+          dir="heki-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}"
+          mkdir -p "$dir"
+          for cmd in node selfcheck; do
+            go build -trimpath -ldflags "-s -w" \
+              -o "${dir}/heki-${cmd}${suffix}" "./cmd/${cmd}"
+          done
+          cp HEKI-FIDELITY.md README.md "$dir"/ 2>/dev/null || true
+          tar -czf "${dir}.tar.gz" "$dir"
+          echo "ARTIFACT=${dir}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
