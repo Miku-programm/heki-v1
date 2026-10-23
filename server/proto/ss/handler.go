@@ -1,11 +1,14 @@
 package ss
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
-	"time"
+
+	"heki/node/dataplane"
 )
 
 // User is a configured Shadowsocks account. For SS-AEAD, Password derives the
@@ -40,7 +43,11 @@ type Handler struct {
 
 	callback ServerCallbacks
 	nat      *natTable
+	dialer   *dataplane.Dialer
 }
+
+// SetDialer sets the optional data-plane egress dialer (routing/DNS/audit).
+func (h *Handler) SetDialer(d *dataplane.Dialer) { h.dialer = d }
 
 // NewHandler builds an SS handler. For SS-2022, nodePSK is the node iPSK (base64).
 func NewHandler(method, nodePSK string, users []*User) (*Handler, error) {
@@ -164,7 +171,12 @@ func (h *Handler) tryDecryptFirstAEAD(conn net.Conn, salt []byte, spec aeadSpec)
 // relay copies between the client (AEAD) and the upstream, with accounting.
 func (h *Handler) relay(user *User, conn net.Conn, reader *aeadReader, salt []byte, spec aeadSpec, addr string, initial []byte) error {
 	_ = h.userLimiter(user.Email)
-	upstream, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	upstream, err := dataplane.DialOrDirect(context.Background(), h.dialer, dataplane.Meta{
+		UserEmail: user.Email, Protocol: "ss", Network: "tcp",
+		ClientIP: dataplane.RemoteIP(conn.RemoteAddr()), IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, host, port)
 	if err != nil {
 		return err
 	}
@@ -185,7 +197,13 @@ func (h *Handler) relay(user *User, conn net.Conn, reader *aeadReader, salt []by
 	var up, down int64
 	done := make(chan struct{}, 2)
 	go func() { n, _ := io.Copy(upstream, reader); up = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
-	go func() { n, _ := io.Copy(writer, upstream); down = n; conn.Close(); upstream.Close(); done <- struct{}{} }()
+	go func() {
+		n, _ := io.Copy(writer, upstream)
+		down = n
+		conn.Close()
+		upstream.Close()
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
 

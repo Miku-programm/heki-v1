@@ -1,12 +1,14 @@
 package vmess
 
 import (
+	"context"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"heki/node/dataplane"
 )
 
 // idleTimeout refreshes the connection deadline during relay (copyBufferWithRefresh).
@@ -46,7 +48,10 @@ func (h *Handler) handleTCP(conn net.Conn, hdr *RequestHeader, vu *vmessUser) er
 	}
 	clientWriter := newAEADChunkWriter(conn, respAEAD, respIV, respMask)
 
-	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(hdr.Address, strconv.Itoa(int(hdr.Port))), 10*time.Second)
+	upstream, err := dataplane.DialOrDirect(context.Background(), h.dialer, dataplane.Meta{
+		UserEmail: vu.user.Email, Protocol: "vmess", Network: "tcp",
+		ClientIP: dataplane.RemoteIP(conn.RemoteAddr()), IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, hdr.Address, int(hdr.Port))
 	if err != nil {
 		return err
 	}

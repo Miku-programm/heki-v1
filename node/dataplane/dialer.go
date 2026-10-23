@@ -35,6 +35,16 @@ type Dialer struct {
 	Timeout       time.Duration
 }
 
+// DialOrDirect dials host:port through d when it is non-nil, otherwise with a
+// plain net dial. It lets handlers stay dialer-agnostic.
+func DialOrDirect(ctx context.Context, d *Dialer, meta Meta, host string, port int) (net.Conn, error) {
+	if d != nil {
+		return d.DialContext(ctx, meta, host, port)
+	}
+	nd := net.Dialer{Timeout: 10 * time.Second}
+	return nd.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+}
+
 // DialContext resolves, routes, binds the egress source, dials, and audits.
 func (d *Dialer) DialContext(ctx context.Context, meta Meta, host string, port int) (net.Conn, error) {
 	// Resolve the host (for IP-based routing and the dial target).
@@ -88,6 +98,10 @@ func (d *Dialer) DialContext(ctx context.Context, meta Meta, host string, port i
 		conn, err = dialViaSOCKS(ctx, nd, out, target, targetPort)
 	case "http":
 		conn, err = dialViaHTTP(ctx, nd, out, target, targetPort)
+	case "trojan":
+		conn, err = dialViaTrojan(ctx, nd, out, target, targetPort)
+	case "vless":
+		conn, err = dialViaVLESS(ctx, nd, out, target, targetPort)
 	default:
 		d.audit(meta, host, ip, port, addr, out.Type, "unsupported")
 		return nil, fmt.Errorf("dataplane: unsupported outbound type %q", out.Type)

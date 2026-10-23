@@ -1,6 +1,7 @@
 package vless
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -8,7 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"heki/node/dataplane"
 )
 
 // User is a configured VLESS account.
@@ -47,7 +49,11 @@ type Handler struct {
 	enc      *xrayEncryptionServer // non-nil when vless_encryption is configured
 	callback ServerCallbacks
 	fallback *FallbackTarget
+	dialer   *dataplane.Dialer
 }
+
+// SetDialer sets the optional data-plane egress dialer (routing/DNS/audit).
+func (h *Handler) SetDialer(d *dataplane.Dialer) { h.dialer = d }
 
 // NewHandler builds a VLESS handler. reality and encryption are optional.
 func NewHandler(users []*User, reality *RealityConfig, enc *xrayEncryptionServer, fallback *FallbackTarget) *Handler {
@@ -121,7 +127,10 @@ func (h *Handler) HandleConn(conn net.Conn) error {
 // post-handshake ApplicationData is spliced through directly (see vision.go).
 func (h *Handler) handleTCP(conn net.Conn, hdr *RequestHeader, user *User) error {
 	_ = h.userLimiter(user.Email)
-	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(hdr.Address, strconv.Itoa(int(hdr.Port))), 10*time.Second)
+	upstream, err := dataplane.DialOrDirect(context.Background(), h.dialer, dataplane.Meta{
+		UserEmail: user.Email, Protocol: "vless", Network: "tcp",
+		ClientIP: dataplane.RemoteIP(conn.RemoteAddr()), IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, hdr.Address, int(hdr.Port))
 	if err != nil {
 		return err
 	}
@@ -141,7 +150,13 @@ func (h *Handler) handleTCP(conn net.Conn, hdr *RequestHeader, user *User) error
 	var up, down int64
 	done := make(chan struct{}, 2)
 	go func() { n, _ := io.Copy(upstream, inner); up = n; inner.Close(); upstream.Close(); done <- struct{}{} }()
-	go func() { n, _ := io.Copy(inner, upstream); down = n; inner.Close(); upstream.Close(); done <- struct{}{} }()
+	go func() {
+		n, _ := io.Copy(inner, upstream)
+		down = n
+		inner.Close()
+		upstream.Close()
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
 

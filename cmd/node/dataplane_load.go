@@ -15,12 +15,16 @@ import (
 // --- routes.toml ---
 
 type tomlOutbound struct {
-	Type     string `toml:"type"`
-	Listen   string `toml:"listen"`
-	Server   string `toml:"server"`
-	Port     int    `toml:"port"`
-	Username string `toml:"username"`
-	Password string `toml:"password"`
+	Type           string `toml:"type"`
+	Listen         string `toml:"listen"`
+	Server         string `toml:"server"`
+	Port           int    `toml:"port"`
+	Username       string `toml:"username"`
+	Password       string `toml:"password"`
+	UUID           string `toml:"uuid"`
+	SNI            string `toml:"sni"`
+	Flow           string `toml:"flow"`
+	SkipCertVerify bool   `toml:"skip_cert_verify"`
 }
 
 type tomlRoute struct {
@@ -51,8 +55,10 @@ func loadRoutes(path string) (enabled bool, routes []dataplane.Route, err error)
 		outs := make([]dataplane.Outbound, 0, len(r.Outs))
 		for _, o := range r.Outs {
 			outs = append(outs, dataplane.Outbound{
-				Type: o.Type, Listen: o.Listen, Server: o.Server,
-				Port: o.Port, User: o.Username, Pass: o.Password,
+				Type: o.Type, Listen: o.Listen, Server: o.Server, Port: o.Port,
+				User: o.Username, Pass: o.Password, // socks/http auth
+				Password: o.Password, UUID: o.UUID, // trojan password / vless uuid
+				SNI: o.SNI, Flow: o.Flow, SkipCertVerify: o.SkipCertVerify,
 			})
 		}
 		routes = append(routes, dataplane.Route{Rules: r.Rules, Outs: outs})

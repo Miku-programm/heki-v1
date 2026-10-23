@@ -30,3 +30,14 @@ func HostIP(addr string) net.IP {
 	}
 	return net.ParseIP(host)
 }
+
+// RemoteIP returns the IP string of a net.Addr (empty when not an IP address).
+func RemoteIP(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	if ip := HostIP(addr.String()); ip != nil {
+		return ip.String()
+	}
+	return ""
+}

@@ -9,12 +9,19 @@ import (
 // data-plane dialer acts on are kept; unknown proxy types are preserved so the
 // dialer can report them honestly.
 type Outbound struct {
-	Type   string // direct / block(reject) / redirect / socks / http
+	Type   string // direct / block / redirect / socks / http / trojan / vless
 	Listen string // egress source IP to bind ("", a specific IP, or "auto")
-	Server string // redirect/socks/http target host
-	Port   int    // redirect/socks/http target port
+	Server string // proxy/redirect target host
+	Port   int    // proxy/redirect target port
 	User   string // socks/http auth
 	Pass   string // socks/http auth
+
+	// proxy-outbound (chained) fields
+	Password       string // trojan password
+	UUID           string // vless uuid
+	SNI            string // TLS server name
+	Flow           string // vless flow (e.g. xtls-rprx-vision)
+	SkipCertVerify bool
 }
 
 func (o *Outbound) normalizedType() string {

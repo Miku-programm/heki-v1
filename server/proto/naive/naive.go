@@ -22,9 +22,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"heki/node/dataplane"
 )
 
 // User is a configured NaiveProxy account (HTTP Basic credentials).
@@ -47,7 +49,11 @@ type Handler struct {
 	mu       sync.RWMutex
 	users    map[string]*User // username -> user
 	callback ServerCallbacks
+	dialer   *dataplane.Dialer
 }
+
+// SetDialer sets the optional data-plane egress dialer (routing/DNS/audit).
+func (h *Handler) SetDialer(d *dataplane.Dialer) { h.dialer = d }
 
 // NewHandler builds a NaiveProxy handler.
 func NewHandler(users []*User) *Handler {
@@ -147,7 +153,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleConnect dials the CONNECT target, sends 200, and relays both directions.
 func (h *Handler) handleConnect(w http.ResponseWriter, r *http.Request, user *User) {
 	_ = h.userLimiter(user.Email)
-	upstream, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	host, portStr, _ := net.SplitHostPort(r.Host)
+	if host == "" {
+		host = r.Host
+	}
+	port, _ := strconv.Atoi(portStr)
+	clientIP := ""
+	if ip := dataplane.HostIP(r.RemoteAddr); ip != nil {
+		clientIP = ip.String()
+	}
+	upstream, err := dataplane.DialOrDirect(r.Context(), h.dialer, dataplane.Meta{
+		UserEmail: user.Email, Protocol: "naive", Network: "tcp",
+		ClientIP: clientIP,
+	}, host, port)
 	if err != nil {
 		http.Error(w, "", http.StatusBadGateway)
 		return

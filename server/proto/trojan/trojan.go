@@ -15,6 +15,7 @@
 package trojan
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
@@ -25,6 +26,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"heki/node/dataplane"
 )
 
 // User is a configured Trojan account.
@@ -62,7 +65,11 @@ type Handler struct {
 	users    []*User
 	callback ServerCallbacks
 	fallback *FallbackTarget
+	dialer   *dataplane.Dialer
 }
+
+// SetDialer sets the optional data-plane egress dialer (routing/DNS/audit).
+func (h *Handler) SetDialer(d *dataplane.Dialer) { h.dialer = d }
 
 // NewHandler builds a Trojan handler; it precomputes each user's auth token.
 func NewHandler(users []*User, fallback *FallbackTarget) *Handler {
@@ -157,7 +164,12 @@ func (h *Handler) HandleConn(conn net.Conn) error {
 
 func (h *Handler) handleTCP(conn net.Conn, addr string, user *User) error {
 	_ = h.userLimiter(user.Email)
-	upstream, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	upstream, err := dataplane.DialOrDirect(context.Background(), h.dialer, dataplane.Meta{
+		UserEmail: user.Email, Protocol: "trojan", Network: "tcp",
+		ClientIP: dataplane.RemoteIP(conn.RemoteAddr()), IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, host, port)
 	if err != nil {
 		return err
 	}

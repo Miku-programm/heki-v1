@@ -24,6 +24,8 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	aTLS "github.com/sagernet/sing/common/tls"
+
+	"heki/node/dataplane"
 )
 
 // User is a TUIC account: auth = (UUID, Password).
@@ -37,11 +39,12 @@ type User struct {
 // Options configures the TUIC server. Zero values fall back to heki's defaults
 // (cubic congestion control, 3s auth timeout, 10s heartbeat).
 type Options struct {
-	CongestionControl string        // cubic (default) / new_reno / bbr
-	ZeroRTTHandshake  bool          // allow 0-RTT (ignore for anti-replay)
-	AuthTimeout       time.Duration // default 3s
-	Heartbeat         time.Duration // default 10s
-	UDPTimeout        time.Duration // UDP association idle timeout
+	CongestionControl string            // cubic (default) / new_reno / bbr
+	ZeroRTTHandshake  bool              // allow 0-RTT (ignore for anti-replay)
+	AuthTimeout       time.Duration     // default 3s
+	Heartbeat         time.Duration     // default 10s
+	UDPTimeout        time.Duration     // UDP association idle timeout
+	Dialer            *dataplane.Dialer // optional egress routing/DNS/audit
 }
 
 // Server wraps the sing-quic TUIC service.
@@ -49,6 +52,7 @@ type Server struct {
 	svc    *tuic.Service[int]
 	pc     net.PacketConn
 	report func(email string, up, down int64)
+	dialer *dataplane.Dialer // nil => plain net.Dial
 
 	mu    sync.RWMutex
 	email map[int]string // userID -> email, for traffic reporting
@@ -59,7 +63,7 @@ type Server struct {
 // New builds a real TUIC server over pc (a UDP PacketConn). report is called
 // with (email, up, down) as streams finish. opt is optional tuning.
 func New(cert tls.Certificate, pc net.PacketConn, report func(string, int64, int64), opt Options) (*Server, error) {
-	s := &Server{pc: pc, report: report, email: map[int]string{}, done: make(chan struct{})}
+	s := &Server{pc: pc, report: report, dialer: opt.Dialer, email: map[int]string{}, done: make(chan struct{})}
 	std := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
@@ -142,8 +146,19 @@ type handler struct{ s *Server }
 func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	defer conn.Close()
 	uid, ok := auth.UserFromContext[int](ctx)
+	email := ""
+	if ok {
+		email = h.s.emailFor(uid)
+	}
 
-	upstream, err := net.Dial("tcp", destination.String())
+	host := destination.Fqdn
+	if host == "" {
+		host = destination.Addr.String()
+	}
+	upstream, err := dataplane.DialOrDirect(ctx, h.s.dialer, dataplane.Meta{
+		UserEmail: email, Protocol: "tuic", Network: "tcp",
+		ClientIP: source.Addr.String(), IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, host, int(destination.Port))
 	if err != nil {
 		if onClose != nil {
 			onClose(err)
@@ -159,10 +174,8 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	<-done
 	<-done
 
-	if ok && h.s.report != nil {
-		if e := h.s.emailFor(uid); e != "" {
-			h.s.report(e, up, down)
-		}
+	if email != "" && h.s.report != nil {
+		h.s.report(email, up, down)
 	}
 	if onClose != nil {
 		onClose(nil)
@@ -188,15 +201,15 @@ func ClientTLSConfig(std *tls.Config) aTLS.Config { return &singTLS{std: std} }
 // ConnectionState), so no Conn wrapper is needed.
 type singTLS struct{ std *tls.Config }
 
-func (c *singTLS) ServerName() string                   { return c.std.ServerName }
-func (c *singTLS) SetServerName(s string)               { c.std.ServerName = s }
-func (c *singTLS) NextProtos() []string                 { return c.std.NextProtos }
-func (c *singTLS) SetNextProtos(n []string)             { c.std.NextProtos = n }
-func (c *singTLS) HandshakeTimeout() time.Duration      { return 0 }
-func (c *singTLS) SetHandshakeTimeout(d time.Duration)  {}
-func (c *singTLS) STDConfig() (*tls.Config, error)      { return c.std, nil }
+func (c *singTLS) ServerName() string                      { return c.std.ServerName }
+func (c *singTLS) SetServerName(s string)                  { c.std.ServerName = s }
+func (c *singTLS) NextProtos() []string                    { return c.std.NextProtos }
+func (c *singTLS) SetNextProtos(n []string)                { c.std.NextProtos = n }
+func (c *singTLS) HandshakeTimeout() time.Duration         { return 0 }
+func (c *singTLS) SetHandshakeTimeout(d time.Duration)     {}
+func (c *singTLS) STDConfig() (*tls.Config, error)         { return c.std, nil }
 func (c *singTLS) Client(conn net.Conn) (aTLS.Conn, error) { return tls.Client(conn, c.std), nil }
 func (c *singTLS) Server(conn net.Conn) (aTLS.Conn, error) { return tls.Server(conn, c.std), nil }
-func (c *singTLS) Clone() aTLS.Config                   { return &singTLS{std: c.std.Clone()} }
-func (c *singTLS) Start() error                         { return nil }
-func (c *singTLS) Close() error                         { return nil }
+func (c *singTLS) Clone() aTLS.Config                      { return &singTLS{std: c.std.Clone()} }
+func (c *singTLS) Start() error                            { return nil }
+func (c *singTLS) Close() error                            { return nil }

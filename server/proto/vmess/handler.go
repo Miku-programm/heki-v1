@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"heki/node/dataplane"
 )
 
 // ServerCallbacks are the runtime hooks injected by the server/scheduler:
@@ -27,6 +29,7 @@ type Handler struct {
 	history   *SessionHistory
 	callbacks ServerCallbacks
 	fallback  func(conn net.Conn) // invoked when authentication fails
+	dialer    *dataplane.Dialer
 
 	ipUserCache    *BoundedIPCache
 	ipCacheSaveDir string
@@ -34,6 +37,9 @@ type Handler struct {
 	stop chan struct{}
 	once sync.Once
 }
+
+// SetDialer sets the optional data-plane egress dialer (routing/DNS/audit).
+func (h *Handler) SetDialer(d *dataplane.Dialer) { h.dialer = d }
 
 // admitIP records the client IP for a user and enforces the device/IP limit.
 // Returns false if the connection should be dropped.

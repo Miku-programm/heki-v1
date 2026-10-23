@@ -10,8 +10,10 @@
 package mierux
 
 import (
+	"context"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 
 	apicommon "github.com/enfein/mieru/v3/apis/common"
@@ -20,6 +22,8 @@ import (
 	"github.com/enfein/mieru/v3/apis/server"
 	"github.com/enfein/mieru/v3/pkg/appctl/appctlpb"
 	"google.golang.org/protobuf/proto"
+
+	"heki/node/dataplane"
 )
 
 // User is a mieru account (auth = username[Email] + password).
@@ -34,6 +38,7 @@ type Server struct {
 	host   string
 	port   int
 	report func(email string, up, down int64)
+	dialer *dataplane.Dialer // nil => plain net.Dial
 
 	mu     sync.Mutex
 	svc    server.Server
@@ -42,10 +47,11 @@ type Server struct {
 }
 
 // New builds a mieru server bound to host:port (TCP transport). report is
-// called with (email, up, down) as streams finish. Call UpdateUsers before
-// Serve to stage the initial user set.
-func New(host string, port int, report func(string, int64, int64)) *Server {
-	return &Server{host: host, port: port, report: report}
+// called with (email, up, down) as streams finish. dialer (optional) routes
+// egress through the data plane. Call UpdateUsers before Serve to stage the
+// initial user set.
+func New(host string, port int, report func(string, int64, int64), dialer *dataplane.Dialer) *Server {
+	return &Server{host: host, port: port, report: report, dialer: dialer}
 }
 
 // UpdateUsers swaps the user set. If the server is running it restarts it with
@@ -141,7 +147,16 @@ func (s *Server) handle(conn net.Conn, req *model.Request) {
 		email = uc.UserName()
 	}
 
-	target, err := net.Dial("tcp", req.DstAddr.String())
+	host, portStr, _ := net.SplitHostPort(req.DstAddr.String())
+	port, _ := strconv.Atoi(portStr)
+	clientIP := ""
+	if ip := dataplane.HostIP(conn.RemoteAddr().String()); ip != nil {
+		clientIP = ip.String()
+	}
+	target, err := dataplane.DialOrDirect(context.Background(), s.dialer, dataplane.Meta{
+		UserEmail: email, Protocol: "mieru", Network: "tcp",
+		ClientIP: clientIP, IngressLocalIP: dataplane.HostIP(conn.LocalAddr().String()),
+	}, host, port)
 	if err != nil {
 		return
 	}

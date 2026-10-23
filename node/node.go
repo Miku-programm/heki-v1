@@ -255,6 +255,7 @@ func (n *Node) buildHandler() error {
 	case "trojan":
 		h := trojan.NewHandler(nil, n.cfg.Fallback)
 		h.SetServerCallbacks(trojan.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, true
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*trojan.User, 0, len(us))
@@ -270,6 +271,7 @@ func (n *Node) buildHandler() error {
 	case "vmess":
 		h := vmess.NewHandler(nil, "", 0)
 		h.SetServerCallbacks(vmess.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, true
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*vmess.User, 0, len(us))
@@ -285,6 +287,7 @@ func (n *Node) buildHandler() error {
 	case "vless":
 		h := vless.NewHandler(nil, nil, nil, visionFallback(n.cfg.Fallback))
 		h.SetServerCallbacks(vless.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, true
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*vless.User, 0, len(us))
@@ -307,6 +310,7 @@ func (n *Node) buildHandler() error {
 		}
 		h := vless.NewHandler(nil, nil, nil, visionFallback(n.cfg.Fallback))
 		h.SetServerCallbacks(vless.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, false // REALITY terminates the transport, not TLS
 		rc := n.cfg.Reality
 		n.realityNew = func(inner net.Listener) (net.Listener, error) {
@@ -338,6 +342,7 @@ func (n *Node) buildHandler() error {
 			return err
 		}
 		h.SetServerCallbacks(ss.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, false // SS carries its own encryption
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*ss.User, 0, len(us))
@@ -353,6 +358,7 @@ func (n *Node) buildHandler() error {
 	case "naive":
 		h := naive.NewHandler(nil)
 		h.SetServerCallbacks(naive.ServerCallbacks{ReportTraffic: report})
+		h.SetDialer(n.dialer)
 		n.handler, n.useTLS = h, true
 		n.syncFn = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*naive.User, 0, len(us))
@@ -417,6 +423,7 @@ func (n *Node) buildHandler() error {
 					UDPTimeout:        time.Duration(tc.UDPTimeoutSec) * time.Second,
 				}
 			}
+			opt.Dialer = n.dialer
 			return tuicx.New(cert, pc, report, opt)
 		}
 		n.udpSync = func(us []*panel.UserInfo) map[string]int {
@@ -448,7 +455,7 @@ func (n *Node) buildHandler() error {
 			return fmt.Errorf("mieru listen port %q: %w", portStr, err)
 		}
 		n.udpNew = func(_ tls.Certificate, _ net.PacketConn) (udpService, error) {
-			return mierux.New(host, port, report), nil
+			return mierux.New(host, port, report, n.dialer), nil
 		}
 		n.udpSync = func(us []*panel.UserInfo) map[string]int {
 			out := make([]*mierux.User, 0, len(us))
