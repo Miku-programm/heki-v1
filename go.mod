@@ -9,10 +9,10 @@ require (
 	github.com/apernet/hysteria/extras/v2 v2.12.2
 	github.com/enfein/mieru/v3 v3.38.0
 	github.com/refraction-networking/utls v1.8.2
-	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691
 	github.com/sagernet/sing v0.9.0
 	github.com/sagernet/sing-quic v0.7.0
 	github.com/sagernet/sing-vmess v0.2.8
+	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 	golang.org/x/crypto v0.58.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -21,11 +21,14 @@ require (
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
+	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/metacubex/utls v1.8.7 // indirect
+	github.com/pires/go-proxyproto v0.11.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect

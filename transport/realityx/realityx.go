@@ -1,8 +1,9 @@
-// Package realityx is a REAL REALITY server layer. heki's kernel links
-// github.com/xtls/reality (+ xtls/xray-core); this uses github.com/sagernet/
-// reality — a wire-compatible maintained fork of xtls/reality — because the
-// bundled uTLS authorized test client (realityc) interoperates with it in
-// process. See HEKI-FIDELITY.md. It drives the upstream reality library to
+// Package realityx is a REAL REALITY server layer built on
+// github.com/xtls/reality — heki's exact library (heki links xtls/reality +
+// xtls/xray-core), pinned to heki's build-info version. On startup it runs
+// reality.DetectPostHandshakeRecordsLens (as xray does) so the authorized path
+// has Dest's learned record shape. The bundled uTLS authorized client
+// (realityc) interoperates with it in process. It drives the reality library to
 // terminate REALITY handshakes, then hands the authenticated connection to a
 // normal handler (heki's VLESS handler). REALITY "borrows" a real TLS site's
 // certificate: the server relays the handshake to Dest and, for an authorized
@@ -24,7 +25,7 @@ import (
 	"net"
 	"os"
 
-	reality "github.com/sagernet/reality"
+	reality "github.com/xtls/reality"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -109,6 +110,11 @@ func NewListener(inner net.Listener, opt Options) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	// xtls/reality mimics the borrowed Dest's post-handshake record shape; it
+	// learns those lengths by probing Dest (as xray does on startup). Without
+	// this, the authorized path blocks waiting for the learned lengths.
+	reality.DetectPostHandshakeRecordsLens(cfg)
+
 	l := &Listener{inner: inner, cfg: cfg, conns: make(chan net.Conn), closed: make(chan struct{})}
 	go l.loop()
 	return l, nil

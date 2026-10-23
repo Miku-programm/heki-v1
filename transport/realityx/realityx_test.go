@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// TestRealityRelaysToDest exercises the REAL sagernet/reality server behavior
+// TestRealityRelaysToDest exercises the REAL xtls/reality server behavior
 // reachable in-process: a non-authorized client connecting through the REALITY
 // listener must be transparently relayed to Dest and complete a TLS 1.3
 // handshake presenting Dest's certificate (REALITY "steal-oneself"). This

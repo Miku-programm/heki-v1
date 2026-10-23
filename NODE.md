@@ -16,9 +16,9 @@
 | **vmess** | TCP+TLS | 已接线(handler 完整,未单独 e2e) |
 | **naive** | TCP+TLS(HTTP/1.1 CONNECT) | 已接线 |
 
-> 五个特殊传输全部接上游真库:`hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)、`vless-reality`(sagernet/reality)。
+> 五个特殊传输全部接上游真库:`hysteria2`(apernet)、`tuic`(sing-quic)、`anytls`(sing-anytls)、`mieru`(enfein/mieru)、`vless-reality`(xtls/reality)。
 >
-> **REALITY 说明**:服务端用的是 sing-box 同款 `sagernet/reality` 真库。授权往返已用**自带的真 uTLS REALITY 客户端**(`transport/realityx/realityc`,refraction-networking/utls)跑通完整 e2e:session_id 鉴权(x25519 共享密钥 + AES-GCM 封装 version/time/shortID)→ 服务端 HMAC-SHA512 证书验证 → VLESS 往返 → 回报面板。未授权连接仍会透明中继到 `dest`(偷自己证书)。生产用 xray/sing-box 的 REALITY 客户端对接即可。
+> **REALITY 说明**:服务端用的是 sing-box 同款 `xtls/reality` 真库。授权往返已用**自带的真 uTLS REALITY 客户端**(`transport/realityx/realityc`,refraction-networking/utls)跑通完整 e2e:session_id 鉴权(x25519 共享密钥 + AES-GCM 封装 version/time/shortID)→ 服务端 HMAC-SHA512 证书验证 → VLESS 往返 → 回报面板。未授权连接仍会透明中继到 `dest`(偷自己证书)。生产用 xray/sing-box 的 REALITY 客户端对接即可。
 
 ## 编译
 ```bash

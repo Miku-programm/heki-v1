@@ -1,5 +1,5 @@
 // Package realityc is a REAL authorized REALITY client built on uTLS, pairing
-// with the realityx server (github.com/sagernet/reality). It reproduces the
+// with the realityx server (github.com/xtls/reality). It reproduces the
 // REALITY client handshake exactly: a browser-fingerprinted uTLS ClientHello
 // whose session_id carries the AES-GCM-sealed auth (version, time, short id),
 // keyed by the x25519 shared secret with the server's public key, plus the
