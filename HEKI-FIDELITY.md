@@ -37,7 +37,11 @@
 
    **sing-vmess:IDA 核查后未见可复现补丁。** 反编译核心 `(*AEADChunkReader).Read` 与原版 v0.2.8 一致(标准 VMess 分块读);符号层也无新增函数——先前的"heki-only"是方法提升 + 死代码消除(未用的 mux / DialEarly / ClientWith* 被裁)造成的噪声。结论:**没有可验证的语义补丁可重建,原版 v0.2.8 已忠实**(vmess 链路 e2e 对着它跑通)。不凭空捏造补丁。
 
-   **sing-quic / mieru:无明显可复原信号。** 体量大(mieru pkg/protocol 175+、含 Mux/PacketUnderlay 等;sing-quic 含 BBR/congestion),符号层没有像 sing-anytls 那样清晰的新增函数信号;判定 body 级补丁需逐个反编译几十上百函数与原版对比,成本极高且多半核心未改,暂用**原版同版本库**(线协议一致)。
+   **mieru:IDA 深挖后未见确认的行为补丁。** 顺着文档提到的"空 TCP 回收 / ~6 分 30 秒会话复用宽限",定位到 `ScheduleController.Idle`/`TryDisableIdle`(对比全局 `scheduleIdleTime`)和 replay 缓存窗口。反编译 `protocol.init` 确认 heki 的 replay 缓存 = `NewCache(4MB, 360s)`,而原版 v3.38.0 就是 `KeyRefreshInterval(120s)*3 = 360s`——**完全一致**。文档里的空闲宽限是 mieru 原版的本地资源策略(非线协议),heki 直接继承。`scheduleIdleTime` 的赋值在 Go 拆分出的多段 init 里、经间接存储,难以干净定位,但它是本地资源常量,不影响线协议/代理行为。结论:**未发现可确认的行为补丁,原版 v3.38.0 忠实。**
+
+   **sing-quic:无明显可复原信号。** 符号层被泛型/congestion(BBR 等)噪声主导,没有像 sing-anytls 那样的新增函数信号;body 级逐函数比对成本极高且多半核心未改,暂用**原版同版本库**(线协议一致)。
+
+   **小结**:heki 四个私有 `./patches/` 里,只有 **sing-anytls** 有清晰、可复原、可验证的**行为补丁**(已重建应用);sing-vmess / mieru 经 IDA 核查**未见可确认的行为补丁**(核心函数/关键常量与原版一致);sing-quic 无可下手信号。私有 fork 的补丁未必都是行为改动——有的是编译裁剪、构建/兼容微调或本地资源常量。
 
 2. **REALITY 已对齐 `xtls/reality`(heki 的确切库+版本)**:用 `xtls/reality@v0.0.0-20260322125925`(只需 Go 1.24)。自带的 uTLS 授权客户端(`transport/realityx/realityc`)**无需改动**即与它互通——授权往返 e2e 通过(`go test ./node -run VLESSReality`)。关键点:xtls/reality 授权路径会**模仿 Dest 的握手后记录长度**,这些长度由 `reality.DetectPostHandshakeRecordsLens`(xray 启动时也调)探测 Dest 得到;`realityx` 在建监听器时调用它,否则授权连接会一直等这个"学习结果"而卡住(首连有一次探测等待,约 5s)。
 
