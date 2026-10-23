@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"heki/node/dataplane"
 	"heki/panel"
 	"heki/server/proto/naive"
 	"heki/server/proto/ss"
@@ -58,6 +59,30 @@ type Config struct {
 
 	Hysteria2 *Hysteria2Config // optional tuning for protocol "hysteria2"
 	TUIC      *TUICConfig      // optional tuning for protocol "tuic"
+
+	Dataplane *DataplaneConfig // optional routing / DNS / audit / PROXY-protocol
+}
+
+// DataplaneConfig configures heki's node data-plane features: rule-based
+// routing to multiple outbounds, source-in-source-out egress binding, DNS
+// rules, domain access auditing, and PROXY-protocol real-IP recovery.
+type DataplaneConfig struct {
+	RoutesEnabled bool
+	Routes        []dataplane.Route
+
+	DNSRules    []dataplane.DNSRule
+	DefaultDNS  []string
+	DNSStrategy string
+
+	AutoOutIP bool
+
+	AuditEnable        bool
+	AuditDomains       []string
+	AuditDir           string
+	AuditRetentionDays int
+
+	ProxyProtocol      bool
+	ForceProxyProtocol bool
 }
 
 // TUICConfig holds optional TUIC tuning, matching heki's tuic knobs
@@ -147,6 +172,11 @@ type Node struct {
 	// listener with the real sagernet/reality handshake.
 	realityNew func(net.Listener) (net.Listener, error)
 
+	// data plane (routing / DNS / audit) and PROXY-protocol TLS termination.
+	dialer  *dataplane.Dialer
+	auditor *dataplane.Auditor
+	tlsCfg  *tls.Config
+
 	mu        sync.RWMutex
 	emailToID map[string]int
 
@@ -174,10 +204,47 @@ func New(cfg Config) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{cfg: cfg, client: client, acct: newAccounting(), emailToID: map[string]int{}, stop: make(chan struct{})}
+	n.buildDataplane()
 	if err := n.buildHandler(); err != nil {
 		return nil, err
 	}
 	return n, nil
+}
+
+// buildDataplane assembles the egress dialer (routing / DNS / audit / source
+// binding) from the config, if any.
+func (n *Node) buildDataplane() {
+	dp := n.cfg.Dataplane
+	if dp == nil {
+		return
+	}
+	var auditor *dataplane.Auditor
+	if dp.AuditEnable && len(dp.AuditDomains) > 0 {
+		dir := dp.AuditDir
+		if dir == "" {
+			dir = "audit"
+		}
+		auditor = dataplane.NewAuditor(dir, dp.AuditDomains, dp.AuditRetentionDays)
+		n.auditor = auditor
+	}
+	var resolver *dataplane.Resolver
+	if len(dp.DNSRules) > 0 || len(dp.DefaultDNS) > 0 {
+		resolver = dataplane.NewResolver(dp.DNSRules, dp.DefaultDNS, dp.DNSStrategy)
+	}
+	n.dialer = &dataplane.Dialer{
+		Router:        dataplane.NewRouter(dp.RoutesEnabled, dp.Routes),
+		Resolver:      resolver,
+		Auditor:       auditor,
+		AutoOutIP:     dp.AutoOutIP,
+		NodeID:        n.cfg.NodeID,
+		ResolveUserID: n.userIDByEmail,
+	}
+}
+
+func (n *Node) userIDByEmail(email string) int {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.emailToID[email]
 }
 
 // buildHandler constructs the protocol handler, its user-sync adapter, and
@@ -321,7 +388,7 @@ func (n *Node) buildHandler() error {
 			return m
 		}
 	case "anytls":
-		h, err := anytlsx.New(report)
+		h, err := anytlsx.New(report, n.dialer)
 		if err != nil {
 			return err
 		}
@@ -476,10 +543,9 @@ func (n *Node) Start() error {
 		return fmt.Errorf("initial user sync: %w", err)
 	}
 
-	var ln net.Listener
-	var err error
+	var tlsCfg *tls.Config
 	if n.useTLS {
-		tlsCfg := n.cfg.TLSConfig
+		tlsCfg = n.cfg.TLSConfig
 		if tlsCfg == nil {
 			cert, cerr := tls.LoadX509KeyPair(n.cfg.TLSCert, n.cfg.TLSKey)
 			if cerr != nil {
@@ -487,12 +553,21 @@ func (n *Node) Start() error {
 			}
 			tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}}
 		}
-		ln, err = tls.Listen("tcp", n.cfg.Listen, tlsCfg)
-	} else {
-		ln, err = net.Listen("tcp", n.cfg.Listen)
 	}
+
+	ln, err := net.Listen("tcp", n.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", n.cfg.Listen, err)
+	}
+	// When PROXY protocol is enabled, the real IP header precedes the TLS
+	// handshake, so TLS is terminated per-connection in acceptLoop. Otherwise
+	// wrap the listener with TLS directly (unchanged behavior).
+	if n.useTLS && n.realityNew == nil {
+		if n.proxyProtocol() {
+			n.tlsCfg = tlsCfg
+		} else {
+			ln = tls.NewListener(ln, tlsCfg)
+		}
 	}
 	if n.realityNew != nil {
 		rln, rerr := n.realityNew(ln)
@@ -527,13 +602,41 @@ func (n *Node) acceptLoop() {
 		if err != nil {
 			return
 		}
-		go func() {
-			defer conn.Close()
-			if err := n.handler.HandleConn(conn); err != nil {
-				log.Printf("[DEBUG] [Node %d] conn: %v", n.cfg.NodeID, err)
-			}
-		}()
+		go n.serveConn(conn)
 	}
+}
+
+// serveConn optionally reads a PROXY-protocol header (real client IP) and
+// terminates TLS when that path is active, then runs the protocol handler.
+func (n *Node) serveConn(conn net.Conn) {
+	defer conn.Close()
+	c := conn
+	if n.proxyProtocol() && n.realityNew == nil {
+		pc, err := dataplane.ReadProxyHeader(c, n.forceProxyProtocol())
+		if err != nil {
+			log.Printf("[DEBUG] [Node %d] proxy protocol: %v", n.cfg.NodeID, err)
+			return
+		}
+		c = pc
+	}
+	if n.tlsCfg != nil { // manual TLS (PROXY-protocol path)
+		tc := tls.Server(c, n.tlsCfg)
+		if err := tc.Handshake(); err != nil {
+			log.Printf("[DEBUG] [Node %d] tls handshake: %v", n.cfg.NodeID, err)
+			return
+		}
+		c = tc
+	}
+	if err := n.handler.HandleConn(c); err != nil {
+		log.Printf("[DEBUG] [Node %d] conn: %v", n.cfg.NodeID, err)
+	}
+}
+
+func (n *Node) proxyProtocol() bool {
+	return n.cfg.Dataplane != nil && n.cfg.Dataplane.ProxyProtocol
+}
+func (n *Node) forceProxyProtocol() bool {
+	return n.cfg.Dataplane != nil && n.cfg.Dataplane.ForceProxyProtocol
 }
 
 func (n *Node) syncLoop() {
@@ -624,6 +727,9 @@ func (n *Node) Stop() {
 		}
 		if n.pc != nil {
 			_ = n.pc.Close()
+		}
+		if n.auditor != nil {
+			n.auditor.Close()
 		}
 	})
 }

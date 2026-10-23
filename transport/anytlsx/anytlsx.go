@@ -18,6 +18,8 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/uot"
+
+	"heki/node/dataplane"
 )
 
 // udpIdleTimeout bounds how long a UoT UDP association waits with no traffic.
@@ -33,12 +35,14 @@ type User struct {
 type Server struct {
 	svc    *anytls.Service
 	report func(email string, up, down int64)
+	dialer *dataplane.Dialer // nil => plain net.Dial
 }
 
 // New builds a real AnyTLS server. report is called with (email, up, down) as
-// streams finish.
-func New(report func(string, int64, int64)) (*Server, error) {
-	s := &Server{report: report}
+// streams finish. dialer (optional) routes egress through the data plane
+// (routing / source-bind / DNS / audit).
+func New(report func(string, int64, int64), dialer *dataplane.Dialer) (*Server, error) {
+	s := &Server{report: report, dialer: dialer}
 	svc, err := anytls.NewService(anytls.ServiceConfig{
 		PaddingScheme: padding.DefaultPaddingScheme,
 		Handler:       &handler{s: s},
@@ -55,7 +59,27 @@ func New(report func(string, int64, int64)) (*Server, error) {
 // It satisfies the node's handlerAdapter interface.
 func (s *Server) HandleConn(conn net.Conn) error {
 	source := M.SocksaddrFromNet(conn.RemoteAddr())
-	return s.svc.NewConnection(context.Background(), conn, source, nil)
+	ctx := dataplane.WithIngressIP(context.Background(), dataplane.HostIP(conn.LocalAddr().String()))
+	return s.svc.NewConnection(ctx, conn, source, nil)
+}
+
+// dial opens the upstream for a destination, via the data-plane dialer when
+// configured, else a plain net.Dial.
+func (s *Server) dial(ctx context.Context, email string, source, dest M.Socksaddr) (net.Conn, error) {
+	if s.dialer == nil {
+		return net.Dial("tcp", dest.String())
+	}
+	host := dest.Fqdn
+	if host == "" {
+		host = dest.Addr.String()
+	}
+	return s.dialer.DialContext(ctx, dataplane.Meta{
+		UserEmail:      email,
+		Protocol:       "anytls",
+		Network:        "tcp",
+		ClientIP:       source.Addr.String(),
+		IngressLocalIP: dataplane.IngressIP(ctx),
+	}, host, int(dest.Port))
 }
 
 // UpdateUsers swaps the user set.
@@ -86,7 +110,7 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	defer conn.Close()
 	ok := email != ""
 
-	upstream, err := net.Dial("tcp", destination.String())
+	upstream, err := h.s.dial(ctx, email, source, destination)
 	if err != nil {
 		if onClose != nil {
 			onClose(err)

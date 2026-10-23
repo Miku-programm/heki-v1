@@ -61,6 +61,19 @@ type fileConfig struct {
 	Reality           *realityFileConfig   `json:"reality"`
 	Hysteria2         *hysteria2FileConfig `json:"hysteria2"`
 	TUIC              *tuicFileConfig      `json:"tuic"`
+
+	// data plane (heki.conf-style)
+	RoutesFile              string `json:"routes_file"`
+	DNSRulesFile            string `json:"dns_rules_file"`
+	DefaultDNS              string `json:"default_dns"` // comma-separated
+	DNSStrategy             string `json:"dns_strategy"`
+	AutoOutIP               bool   `json:"auto_out_ip"`
+	ProxyProtocol           bool   `json:"proxy_protocol"`
+	ForceProxyProtocol      bool   `json:"force_proxy_protocol"`
+	DomainAuditEnable       bool   `json:"domain_audit_enable"`
+	DomainAuditDomains      string `json:"domain_audit_domains"` // comma-separated
+	DomainAuditLogDir       string `json:"domain_audit_log_dir"`
+	DomainAuditRetentionDay int    `json:"domain_audit_retention_days"`
 }
 
 type hysteria2FileConfig struct {
@@ -79,6 +92,8 @@ type tuicFileConfig struct {
 
 func main() {
 	cfgPath := flag.String("c", "config.json", "path to config.json")
+	routesPath := flag.String("r", "", "path to routes.toml (overrides routes_file)")
+	dnsPath := flag.String("d", "", "path to dns.yml (overrides dns_rules_file)")
 	genKey := flag.Bool("genkey", false, "generate a REALITY x25519 key pair (hex) and exit")
 	flag.Parse()
 
@@ -143,6 +158,9 @@ func main() {
 			HeartbeatSec:      fc.TUIC.HeartbeatSec,
 			UDPTimeoutSec:     fc.TUIC.UDPTimeoutSec,
 		}
+	}
+	if dp := buildDataplane(fc, *routesPath, *dnsPath); dp != nil {
+		cfg.Dataplane = dp
 	}
 
 	n, err := node.New(cfg)

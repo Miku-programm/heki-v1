@@ -113,6 +113,50 @@ go build -o heki-node ./cmd/node
 - **AnyTLS UoT(UDP over TCP)**:`anytls` 现支持 UDP——客户端按 sing UoT(magic 地址 `sp.v2.udp-over-tcp.arpa` + `uot.Request`)发包,节点中继到真实 UDP 目标并计流量。验证 `go test ./node -run AnyTLSUoT`(真数据报往返)。
 - **VMess alterId**:`alterId==0` 走 VMessAEAD;保留 `alterId>0` 则按 heki 行为锁定到 **VMessMD5-only**(该用户从 AEAD 匹配中排除,避免 AEAD/MD5 混跑),遗留认证为 `HMAC-MD5(id, 时间戳)`(主 UUID + AlterID 链,带时钟窗口)。验证 `go test ./server/proto/vmess -run AlterIDModeLock`。遗留 AES-CFB 请求体已废弃、未接线——按文档建议订阅里直接删掉 alterId 走 AEAD。
 
+## 节点运维/网络面(routes / DNS / 源进源出 / 真实 IP / 审计)
+节点内置一个数据面(`node/dataplane`),按文档实现了常用运维能力,均有测试。
+
+### 多路由多出口(`routes.toml`)
+`-r routes.toml` 或 config 里 `routes_file`;按顺序匹配规则,命中后随机选一个出口;启用后未命中则关闭连接。
+```toml
+enable=true
+[[routes]]
+rules=["geosite:netflix","domain:google.com","ip:1.2.3.4/24","port:1000-2000","node_id:1"]
+[[routes.Outs]]
+type="socks"      # direct / block(reject) / redirect / socks / http
+server="proxy.example.com"
+port=1080
+[[routes]]
+rules=["*"]
+[[routes.Outs]]
+type="direct"
+listen=""          # 出口网卡 IP(源绑定);留空由系统决定
+```
+> 规则匹配支持 `domain:`/`domain-keyword:`/`full:`/`ip:`/`cidr:`/`port:`/`node_id:`/`regexp:`/`glob:`/裸串/`*`(`geosite:`/`geoip:` 需 .dat 文件,未内置→不命中)。出口已实现 `direct`/`block`/`redirect`/`socks`/`http`;加密代理出口(ss/trojan/vmess/vless/anytls)仅解析,未接链式客户端。
+
+### 源进源出(`auto_out_ip`)
+config 里 `auto_out_ip=true`:按用户连入的入口本地 IP 绑定出口源 IP。优先级 `routes.toml 的 listen` > `auto_out_ip` > 系统默认。
+
+### DNS 规则(`dns.yml`)
+`-d dns.yml` 或 `dns_rules_file`;按域名规则选 DNS 服务器与策略;`default_dns`/`dns_strategy` 兜底。优先级 dns.yml > default_dns > 系统。
+```yaml
+8.8.8.8:53,1.1.1.1:
+  strategy: ipv4_first     # ipv4_first/ipv4_only/ipv6_first/ipv6_only
+  rules:
+    - domain:google.com
+1.1.1.1:
+  - domain:youtube.com     # 省略 strategy/rules,直接列规则
+```
+> DNS 地址支持裸 `8.8.8.8[:port]`、`tcp://`、`tcp-tls://`(当前按 TCP/UDP 解析;DoH 回退 UDP)。
+
+### 中转获取真实 IP(PROXY protocol)
+config 里 `proxy_protocol=true`(可加 `force_proxy_protocol=true`):TCP/TLS 入站先读 PROXY protocol v1/v2 头,拿到真实源 IP(TLS 在读头之后终结)。真实 IP 会进入审计与路由匹配。
+
+### 域名访问审计(JSONL)
+config 里 `domain_audit_enable=true`、`domain_audit_domains=api.ip.sb,cidr:198.51.100.0/24,glob:check-*.example.com`、`domain_audit_log_dir`、`domain_audit_retention_days`。命中规则的连接按节点+日期写 JSONL(字段同 heki:`time/node_id/user_id/protocol/network/client_ip/target/target_host/target_ip/target_port/status`),非阻塞队列 + 短窗去重 + 按保留天清理。
+
+> 验证:`go test ./node/dataplane`(规则/路由/PROXY v1+v2/审计/策略单测)+ `go test ./node -run Dataplane`(AnyTLS 全链路:PROXY 真实 IP → 路由 direct → 审计落盘,断言 client_ip)。当前已接入 **anytls** 出站路径;其余协议后续接同一 `dataplane.Dialer` 即可。
+
 ## 运行
 ```bash
 ./heki-node -c config.json
